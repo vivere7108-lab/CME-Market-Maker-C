@@ -1,0 +1,15 @@
+build/
+build-*/
+cmake-build-*/
+.cache/
+compile_commands.json
+# Local data & run output
+data_cache/
+runs/
+*.dbn
+*.dbn.zst
+*.log
+.env
+# Third-party sources dropped in locally (never committed)
+third_party/twsapi/
+third_party/databento-cpp/

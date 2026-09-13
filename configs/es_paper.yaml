@@ -1,0 +1,124 @@
+# The forward walk: MES, MDP 3.0 via Databento, orders to an IBKR paper account.
+#
+#   harvester doctor -c configs/es_paper.yaml             # preflight; places nothing
+#   harvester live   -c configs/es_paper.yaml --dry-run   # real book, simulated fills
+#   harvester live   -c configs/es_paper.yaml             # routes to the paper account
+#
+# `allow_live_trading` is true because the binary refuses to route ANY non-dry-run
+# order -- paper included -- without it. Once true it ALSO disables the
+# broker's own check that the account is a paper one, so the only thing
+# between this file and real money is which account the Gateway is logged
+# into. Keep `port: 4002` pointed at a paper Gateway until the walk has said
+# something.
+#
+# This walks MES, not ES: the same book and the same fill reading at a tenth
+# of the notional. The fee is a larger share of the tick there ($0.62 against
+# a $1.25 tick, against $2.30 on a $12.50 tick), so MES net-per-contract is a
+# harder test than ES, not an easier one -- read it as a floor.
+
+product: MES
+
+databento:
+  dataset: GLBX.MDP3
+  schema: mbp-10              # ten levels a side, a tenth of MBO's message rate.
+                              # `mbo` gives the exact queue; the fill model is
+                              # the same either way. Needs DATABENTO_API_KEY.
+  symbol: MES.v.0             # front contract by volume; rolls itself. The raw
+  stype_in: continuous        # contract it resolves to is what IBKR is told to
+                              # route to.
+  stale_after_seconds: 3.0
+
+book:
+  depth: 10
+  anchor: microprice
+
+toxicity:
+  enabled: true
+  # These four are the values the 10-session backtest ran, ported here so the
+  # forward walk is measuring the same gate. MES trades ~780k contracts an RTH
+  # session against ES's ~1.12M, so a 200-contract bucket fills about every 6s
+  # here against 4.2s on the ES tape -- the cadence is close but not identical,
+  # which is the one place this walk is not a like-for-like of the backtest.
+  bucket_contracts: 200       # ~3,900 buckets a session on MES
+  window_buckets: 20          # VPIN over ~2 minutes of tape
+  history_buckets: 400        # ~40 minutes of readings for the percentile
+  warmup_buckets: 40          # ~8k contracts, ~4 minutes, before the gate bites
+  elevated_enter: 0.70
+  elevated_exit: 0.60
+  toxic_enter: 0.90
+  toxic_exit: 0.80
+  extreme_enter: 0.97
+  extreme_exit: 0.93
+  min_dwell_buckets: 3
+  spread_multiplier: {calm: 1.0, elevated: 1.5, toxic: 2.5, extreme: 4.0}
+  # Also the backtest's. Inert while base_size is 1 -- the engine ceils, so
+  # 1 x 0.5 is still 1 -- and it only bites if base_size is ever raised.
+  size_multiplier:   {calm: 1.0, elevated: 0.75, toxic: 0.5, extreme: 0.0}
+  extreme_action: reduce_only # at extreme: only the side that flattens
+
+flow:
+  ofi_window_ms: 1000.0
+  depletion_window_ms: 500.0
+  run_saturation: 8
+  run_decay_seconds: 2.0
+
+quoting:
+  gamma: 0.05                 # risk aversion, per point
+  kappa: 1.5                  # order-arrival decay, per point
+  horizon_seconds: 60.0       # how long a position is expected to be held
+  vol_halflife_seconds: 30.0
+  vol_sample_ms: 250.0
+  vol_floor: 0.02
+  vol_ceiling: 2.0
+  min_half_spread_ticks: 1.0
+  behind_best_ticks: 1        # never at the touch: one tick behind it
+  max_behind_ticks: 8         # further than this is not quoted
+  base_size: 1
+  max_size: 1
+  skew_ofi_ticks: 1.0
+  skew_depletion_ticks: 1.0
+  skew_run_ticks: 0.5
+
+execution:
+  max_messages_per_second: 30.0   # IBKR disconnects at 50; leave room for acks
+  burst: 10
+  requote_min_interval_ms: 250.0
+  requote_price_ticks: 0.0
+  requote_size_fraction: 0.34
+  poll_positions_seconds: 30.0
+  poll_account_seconds: 120.0
+  ack_timeout_seconds: 5.0
+
+risk:
+  max_position: 2             # contracts. Well under margin capacity on purpose:
+  reduce_only_position: 1     # the binding constraint is adverse selection.
+  daily_loss_limit_usd: 500.0
+  flatten_on_halt: true
+  flatten_cross_ticks: 2
+  flatten_outside_hours: true
+  max_margin_utilisation: 1.0 # off by choice: inventory risk is bounded by
+                              # max_position and max_size above, not by margin.
+                              # The halt at risk.py can no longer fire, so those
+                              # two numbers are now the only inventory limit.
+  stale_book_cancel_seconds: 2.0
+  kill_file: runs/HALT        # `touch runs/HALT` pulls every quote
+
+ibkr:
+  host: 127.0.0.1
+  port: 4002                  # IB Gateway paper. TWS paper is 7497.
+  client_id: 23
+  allow_live_trading: true    # required to route non-dry-run orders; see above
+  outside_rth: true
+
+live:
+  journal: true
+  journal_dir: runs/live
+  decision_interval_ms: 100.0
+  quote_start: '08:45'        # Chicago. RTH opens 08:30; the first quarter hour
+  quote_end: '15:00'          # and the last are a different book.
+  reconnect: true
+  reconnect_backoff_seconds: 15.0
+  max_reconnect_backoff_seconds: 300.0
+  max_reconnect_attempts: null
+  heartbeat_seconds: 300.0
+  snapshot_seconds: 1.0

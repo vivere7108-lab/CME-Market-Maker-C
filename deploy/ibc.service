@@ -1,0 +1,57 @@
+[Unit]
+Description=IB Gateway (via IBC)
+Documentation=https://github.com/IbcAlpha/IBC
+After=network-online.target
+Wants=network-online.target
+# A login loop against IBKR gets the account locked, which is far worse than
+# being down. Cap the retries rather than hammering it.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+
+# TWS_MAJOR_VRSN, TWS_PATH and friends are written by install-ibc.sh from
+# the gateway install it actually produced. Hardcoding the version here made
+# the unit go stale the moment IBKR shipped a new gateway, and the only
+# symptom was a connection refused from something three steps downstream.
+# Re-run install-ibc.sh after a gateway upgrade to refresh it.
+EnvironmentFile=/etc/ibc/ibc.env
+
+# IB Gateway is a Java GUI application with no headless mode, so it runs
+# under a virtual display. xvfb-run --auto-servernum picks a free display
+# number and exports DISPLAY itself; setting DISPLAY here as well would
+# only override it with a guess.
+#
+# -inline matters more than it looks: without it, gatewaystart.sh opens an
+# xterm and backgrounds it with `&`, then the script itself returns -- so
+# systemd sees a clean, instant exit and, with Restart=always, loops
+# forever starting and immediately reaping it. -inline makes it exec
+# straight into displaybannerandlaunch.sh instead, which backgrounds only
+# the java process and blocks on `wait`, giving systemd an actual
+# long-running PID to track. It also sidesteps needing xterm at all.
+ExecStartPre=/usr/bin/install -d -o @SERVICE_USER@ -g @SERVICE_USER@ /home/@SERVICE_USER@/ibc-logs
+ExecStart=/usr/bin/xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" \
+    /opt/ibc/gatewaystart.sh -inline
+
+# The gateway restarts itself once a day (AutoRestartTime in config.ini). If
+# it exits outright instead, bring it back -- but slowly, because a login
+# loop against IBKR gets the account locked, which is far worse than being
+# down for a minute.
+Restart=always
+RestartSec=60
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ibc
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/@SERVICE_USER@
+
+[Install]
+WantedBy=multi-user.target

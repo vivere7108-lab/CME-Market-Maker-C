@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+#
+# IB Gateway + IBC, headless.
+#
+#   sudo ./deploy/install-ibc.sh
+#
+# Why IBC: IB Gateway is a desktop application that expects a human to type
+# a password and to click through the restart it forces on itself every day.
+# IBC drives both. Without it an unattended walk dies at the first daily
+# restart, and there is nothing in the strategy's log to say why.
+#
+# This script downloads from Interactive Brokers and from the IBC project.
+# Versions move; if a download 404s, check the two URLs below rather than
+# assuming the script is broken.
+
+set -euo pipefail
+
+SERVICE_USER="${SERVICE_USER:-harvester}"
+IBC_VERSION="${IBC_VERSION:-3.20.0}"
+IBC_DIR="${IBC_DIR:-/opt/ibc}"
+IBC_CONFIG_DIR="${IBC_CONFIG_DIR:-/etc/ibc}"
+TWS_SETTINGS_DIR="${TWS_SETTINGS_DIR:-/home/${SERVICE_USER}/Jts}"
+
+GATEWAY_URL="${GATEWAY_URL:-https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/ibgateway-stable-standalone-linux-x64.sh}"
+IBC_URL="${IBC_URL:-https://github.com/IbcAlpha/IBC/releases/download/${IBC_VERSION}/IBCLinux-${IBC_VERSION}.zip}"
+
+log() { printf '\n== %s\n' "$*"; }
+
+# Make a path executable BY THE SERVICE USER, not merely by root.
+#
+# Three different things produce the identical "sudo: unable to execute ...
+# Permission denied", and it is worth fixing all of them rather than
+# guessing which one bit:
+#
+#   1. `mktemp -d` as root creates the directory 0700 root-owned, so the
+#      service user cannot traverse into it -- the file's own mode is then
+#      irrelevant;
+#   2. unzip under umask 022 leaves scripts 0644, and `chmod u+x` makes that
+#      0744, which is executable by root and by nobody else;
+#   3. /tmp is mounted noexec on plenty of hardened VPS images.
+#
+# Staging under the service user's own home dodges (1) and (3); make_runnable
+# handles (2).
+make_runnable() {
+    local path="$1"
+    chown "${SERVICE_USER}:${SERVICE_USER}" "${path}"
+    chmod 0755 "${path}"
+}
+
+# Fail here, with an explanation, rather than three steps later inside
+# systemd where the error has no context.
+assert_runnable() {
+    local path="$1" what="$2"
+    if ! sudo -u "${SERVICE_USER}" test -x "${path}"; then
+        cat >&2 <<EOF
+
+${what} is not executable by ${SERVICE_USER}:
+
+  $(stat -c '%a %U:%G %n' "${path}")
+
+Every directory on that path must be traversable by ${SERVICE_USER}, the
+file itself must be mode 0755, and the filesystem must not be mounted
+noexec. Check:  mount | grep ' $(df --output=target "${path}" | tail -1) '
+EOF
+        return 1
+    fi
+}
+
+if [[ $EUID -ne 0 ]]; then
+    echo "run as root: sudo $0" >&2
+    exit 1
+fi
+
+# Which version of this script is actually running. A stale checkout fails
+# in exactly the same way as an unfixed one, so say the commit up front
+# rather than leaving "did the pull land?" to be inferred from the error.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if commit=$(git -c safe.directory='*' -C "${script_dir}" \
+                log -1 --format='%h %ad %s' --date=short 2>/dev/null); then
+    echo "install-ibc.sh from ${commit}"
+fi
+
+if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+    echo "no such user: ${SERVICE_USER}. Run deploy/bootstrap.sh first." >&2
+    exit 1
+fi
+
+# Staging lives in the service user's home, not /tmp: see make_runnable.
+staging="/home/${SERVICE_USER}/.install"
+install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${staging}"
+workdir="$(mktemp -d "${staging}/ibc-XXXXXX")"
+chown "${SERVICE_USER}:${SERVICE_USER}" "${workdir}"
+chmod 0755 "${workdir}"
+trap 'rm -rf "${workdir}"' EXIT
+
+log "IB Gateway"
+
+# IBC locates the gateway as $TWS_PATH/ibgateway/$TWS_MAJOR_VRSN/jars, so the
+# install has to land in that exact shape. The current stable-standalone
+# installer no longer produces it under any invocation this script has
+# tried -- with or without -dir, it lays the gateway out flat (jars/
+# directly under the target directory, no version component) -- so rather
+# than trust the installer's own layout, force a known -dir and restructure
+# the result into the version directory IBC needs ourselves, naming it from
+# the launcher jar the installer just wrote (twslaunch-1045.jar -> "1045").
+GATEWAY_ROOT="/home/${SERVICE_USER}/Jts/ibgateway"
+
+detect_version() {
+    # Standard layout -> print the version directory name (e.g. "1030").
+    local jars
+    jars="$(find "${GATEWAY_ROOT}" -maxdepth 2 -mindepth 2 -type d -name jars \
+            2>/dev/null | sort -V | tail -1)"
+    [[ -n "${jars}" ]] || return 1
+    basename "$(dirname "${jars}")"
+}
+
+if TWS_MAJOR_VRSN="$(detect_version)"; then
+    echo "already installed: version ${TWS_MAJOR_VRSN}"
+else
+    # A flat install from an earlier run of this script, or from the
+    # installer itself, is unusable by IBC as-is -- move it aside so -dir
+    # below starts from an empty directory instead of merging into it.
+    if [[ -d "${GATEWAY_ROOT}" && -n "$(ls -A "${GATEWAY_ROOT}" 2>/dev/null)" ]]; then
+        log "moving aside an existing unversioned install at ${GATEWAY_ROOT}"
+        mv "${GATEWAY_ROOT}" "${GATEWAY_ROOT}.flat.$(date +%s)"
+    fi
+    sudo -u "${SERVICE_USER}" mkdir -p "${GATEWAY_ROOT}"
+
+    curl -fsSL "${GATEWAY_URL}" -o "${workdir}/ibgateway.sh"
+    make_runnable "${workdir}/ibgateway.sh"
+    assert_runnable "${workdir}/ibgateway.sh" "The IB Gateway installer"
+
+    # HOME and TMPDIR are set explicitly. The installer is an install4j
+    # bundle that unpacks itself into TMPDIR before running -- pointing that
+    # at the staging directory keeps it off a possibly-noexec /tmp -- and
+    # sudo does not reliably hand the target user its own HOME, which is
+    # where the installer puts ~/Jts.
+    #
+    # sudo -u also does not change the working directory: the installer
+    # inherits whatever directory this script's caller was in, typically
+    # /root, and shells back into it with a bare `cd` right before exit.
+    # The service user can't traverse /root, so that cd fails and the
+    # installer aborts having written nothing -- silently, since the actual
+    # install already succeeded by that point. workdir is 0755 and owned by
+    # the service user, so both sides of the sudo can reach it.
+    #
+    # -q is unattended mode; -dir pins the flat layout to a known place so
+    # the restructuring below doesn't have to go hunting for it.
+    cd "${workdir}"
+    sudo -u "${SERVICE_USER}" env \
+        HOME="/home/${SERVICE_USER}" \
+        TMPDIR="${workdir}" \
+        "${workdir}/ibgateway.sh" -q -dir "${GATEWAY_ROOT}"
+
+    if [[ -d "${GATEWAY_ROOT}/jars" ]]; then
+        launcher="$(ls "${GATEWAY_ROOT}"/jars/twslaunch-*.jar 2>/dev/null | head -1)"
+        version="$(basename "${launcher:-}" .jar | sed -nE 's/^twslaunch-([0-9]+)$/\1/p')"
+        if [[ -n "${version}" ]]; then
+            versioned_dir="${GATEWAY_ROOT}/${version}"
+            mkdir "${versioned_dir}"
+            (
+                shopt -s dotglob
+                for entry in "${GATEWAY_ROOT}"/*; do
+                    [[ "${entry}" == "${versioned_dir}" ]] && continue
+                    mv "${entry}" "${versioned_dir}/"
+                done
+            )
+            chown -R "${SERVICE_USER}:${SERVICE_USER}" "${versioned_dir}"
+        fi
+    fi
+
+    if ! TWS_MAJOR_VRSN="$(detect_version)"; then
+        cat >&2 <<EOF
+
+The IB Gateway installer ran but no ibgateway/<version>/jars directory
+appeared under ${GATEWAY_ROOT}. IBC cannot start without it.
+
+What is actually there:
+$(ls -la "${GATEWAY_ROOT}" 2>/dev/null || echo "  (nothing -- the install did not write anything)")
+EOF
+        exit 1
+    fi
+    echo "installed version ${TWS_MAJOR_VRSN}"
+fi
+
+log "IBC ${IBC_VERSION}"
+if [[ -f "${IBC_DIR}/gatewaystart.sh" ]]; then
+    echo "already installed; skipping download"
+else
+    curl -fsSL "${IBC_URL}" -o "${workdir}/ibc.zip"
+    mkdir -p "${IBC_DIR}"
+    unzip -oq "${workdir}/ibc.zip" -d "${IBC_DIR}"
+    # a+rX, not u+x: unzip leaves 0644 and `chmod u+x` would make that 0744,
+    # which root can run and the service user cannot -- and ibc.service runs
+    # as the service user, so it would fail at ExecStart with no clue why.
+    # The capital X sets the directory traverse bit without marking every
+    # data file executable.
+    chmod -R a+rX "${IBC_DIR}"
+    find "${IBC_DIR}" -name '*.sh' -exec chmod 0755 {} +
+fi
+
+assert_runnable "${IBC_DIR}/gatewaystart.sh" "The IBC launcher"
+
+log "configuration"
+mkdir -p "${IBC_CONFIG_DIR}"
+if [[ -f "${IBC_CONFIG_DIR}/config.ini" ]]; then
+    echo "${IBC_CONFIG_DIR}/config.ini exists; left alone"
+else
+    cp "${IBC_DIR}/config.ini" "${IBC_CONFIG_DIR}/config.ini"
+    # Sane defaults for an unattended paper walk. Credentials are NOT set
+    # here -- you type them in once, below.
+    python3 - "${IBC_CONFIG_DIR}/config.ini" <<'PY'
+import re, sys, pathlib
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+settings = {
+    # Paper, always. Flip this deliberately or not at all.
+    "TradingMode": "paper",
+    # Accept the API connection from localhost without a dialog.
+    "AcceptIncomingConnectionAction": "accept",
+    "AllowBlindTrading": "yes",
+    # The forced daily restart: let IBC drive it rather than a human.
+    # 02:00 is after the CME close and before the next session.
+    "AutoRestartTime": "02:00 AM",
+    # Do not let the gateway close itself on a schedule; the restart above
+    # is the only interruption we want.
+    "ClosedownAt": "",
+    "ExistingSessionDetectedAction": "primary",
+    # Read-only would block every order, including paper ones.
+    "ReadOnlyApi": "no",
+    # A first-ever paper login shows this as a modal dialog that blocks
+    # everything behind it, API included -- "no" leaves the account unable
+    # to place any API order until a human clicks through it once. There is
+    # no unattended path here other than accepting it up front.
+    "AcceptNonBrokerageAccountWarning": "yes",
+}
+for key, value in settings.items():
+    pattern = rf"(?m)^{re.escape(key)}=.*$"
+    if re.search(pattern, text):
+        text = re.sub(pattern, f"{key}={value}", text)
+    else:
+        text += f"\n{key}={value}\n"
+path.write_text(text)
+print("applied unattended defaults to", path)
+PY
+fi
+
+log "environment for systemd"
+# The unit reads these rather than carrying a hardcoded version that goes
+# stale the moment IBKR ships a new gateway.
+cat > "${IBC_CONFIG_DIR}/ibc.env" <<EOF
+# Generated by deploy/install-ibc.sh on $(date -Is). Re-run it after a
+# gateway upgrade; TWS_MAJOR_VRSN changes with the version.
+TWS_MAJOR_VRSN=${TWS_MAJOR_VRSN}
+TWS_PATH=/home/${SERVICE_USER}/Jts
+TWS_SETTINGS_PATH=${TWS_SETTINGS_DIR}
+IBC_INI=${IBC_CONFIG_DIR}/config.ini
+IBC_PATH=${IBC_DIR}
+LOG_PATH=/home/${SERVICE_USER}/ibc-logs
+EOF
+chmod 0644 "${IBC_CONFIG_DIR}/ibc.env"
+echo "  wrote ${IBC_CONFIG_DIR}/ibc.env (gateway version ${TWS_MAJOR_VRSN})"
+
+# ibc.env above is for the systemd unit; gatewaystart.sh itself never reads
+# it. Its header says as much -- "the following lines are the only ones
+# you may need to change" -- these are plain assignments at the top of the
+# file, not environment-variable fallbacks, so EnvironmentFile is silently
+# a no-op for TWS_MAJOR_VRSN, TWS_PATH, TWS_SETTINGS_PATH, IBC_INI and
+# LOG_PATH. Patch the file itself with the values just resolved above.
+# Idempotent, and re-run on every install so a gateway upgrade's new
+# TWS_MAJOR_VRSN actually takes effect here too, not just in ibc.env.
+sed -i \
+    -e "s|^TWS_MAJOR_VRSN=.*|TWS_MAJOR_VRSN=${TWS_MAJOR_VRSN}|" \
+    -e "s|^IBC_INI=.*|IBC_INI=${IBC_CONFIG_DIR}/config.ini|" \
+    -e "s|^TWS_PATH=.*|TWS_PATH=/home/${SERVICE_USER}/Jts|" \
+    -e "s|^TWS_SETTINGS_PATH=.*|TWS_SETTINGS_PATH=${TWS_SETTINGS_DIR}|" \
+    -e "s|^LOG_PATH=.*|LOG_PATH=/home/${SERVICE_USER}/ibc-logs|" \
+    "${IBC_DIR}/gatewaystart.sh"
+echo "  patched ${IBC_DIR}/gatewaystart.sh with the resolved paths"
+
+# Prove the path IBC will actually construct exists, here, rather than
+# letting it fail inside systemd with no context.
+gateway_jars="/home/${SERVICE_USER}/Jts/ibgateway/${TWS_MAJOR_VRSN}/jars"
+if [[ ! -d "${gateway_jars}" ]]; then
+    echo "expected gateway jars at ${gateway_jars}, which does not exist" >&2
+    exit 1
+fi
+echo "  gateway jars: ${gateway_jars}"
+
+# The config holds a password. Treat it accordingly.
+chown root:"${SERVICE_USER}" "${IBC_CONFIG_DIR}/config.ini"
+chmod 640 "${IBC_CONFIG_DIR}/config.ini"
+install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 750 "${TWS_SETTINGS_DIR}"
+
+cat <<EOF
+
+IB Gateway and IBC are installed. Two things left, and both are yours:
+
+  1. Credentials. Edit ${IBC_CONFIG_DIR}/config.ini and set:
+
+         IbLoginId=<your paper username>
+         IbPassword=<your paper password>
+         TradingMode=paper
+
+     The file is already root:${SERVICE_USER} 0640 so it is not world
+     readable. It is NOT in git and must not go there.
+
+  2. Start it:
+
+         sudo systemctl enable --now ibc
+         sudo journalctl -u ibc -f
+
+     First login may trigger a two-factor prompt on your phone. Once the
+     gateway is up, paper API is on port 4002.
+
+Then: harvester doctor -c configs/es_paper.yaml
+EOF

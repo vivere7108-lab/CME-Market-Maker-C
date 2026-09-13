@@ -1,0 +1,45 @@
+[Unit]
+Description=CME-Market-Maker-C -- toxicity-aware market making forward walk
+After=network-online.target ibc.service
+Wants=network-online.target
+# Ordered after ibc but deliberately not Requires= or BindsTo=: the runner
+# survives the gateway going away and coming back, and binding them would
+# restart the quoter on every daily gateway restart.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+WorkingDirectory=@INSTALL_DIR@
+
+# HARVESTER_ARGS and DATABENTO_API_KEY live here, so switching out of
+# --dry-run is an edit to one file plus a restart, not an edit to a unit.
+EnvironmentFile=/etc/harvester.env
+
+ExecStart=@INSTALL_DIR@/build/harvester $HARVESTER_ARGS
+
+# The runner reconnects internally, so a process exit means something it
+# could not handle. Come back, but not in a tight loop -- and note that a
+# restart clears a HALT, which is the one state that should not be cleared
+# by a supervisor: read the journal before letting it come back.
+Restart=on-failure
+RestartSec=60
+
+# SIGTERM is handled: every quote is pulled and the cycle finishes.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=harvester
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@INSTALL_DIR@/runs
+
+[Install]
+WantedBy=multi-user.target
