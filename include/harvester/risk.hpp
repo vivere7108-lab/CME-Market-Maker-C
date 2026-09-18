@@ -1,8 +1,8 @@
 // What stops the quoter, and what merely pulls it.
 //
 // * **pull** -- cancel every quote now, resume when the condition clears.
-//   A stale book, outside the quoting hours, the operator's kill file
-//   while it exists.
+//   A stale book, outside the quoting hours, realised vol above
+//   ``max_sigma``, the operator's kill file while it exists.
 // * **halt** -- cancel, optionally flatten, and stay stopped until a
 //   person restarts the process.  The daily loss limit, margin past the
 //   utilisation cap, a position the account holds that the book cannot
@@ -40,8 +40,12 @@ public:
     explicit RiskMonitor(const RiskConfig& cfg) : cfg_(cfg) {}
 
     void halt(const std::string& reason);
+    // ``sigma`` is the realised vol of the anchor, in points per
+    // root-second, or none while the estimator is still warming up -- the
+    // ceiling cannot be applied to a number that is still the floor.
     Verdict evaluate(const Inventory& inventory, std::optional<double> mark, double feed_age_seconds, bool in_hours,
-                     const AccountValues* account = nullptr, std::optional<int> broker_position = std::nullopt);
+                     const AccountValues* account = nullptr, std::optional<int> broker_position = std::nullopt,
+                     std::optional<double> sigma = std::nullopt);
 
     const RiskConfig& cfg() const { return cfg_; }
     bool halted = false;

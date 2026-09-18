@@ -101,6 +101,17 @@ risk:
                               # The halt at risk.py can no longer fire, so those
                               # two numbers are now the only inventory limit.
   stale_book_cancel_seconds: 2.0
+  max_sigma: 0.25             # points per root-second. The primary gate: no quote
+                              # is placed while the anchor is moving faster than
+                              # this. Measured on ten ES sessions, fills taken
+                              # above it are the ones that mark out worst, and a
+                              # ceiling anywhere in 0.22-0.30 beat quoting
+                              # through them by ~$670 a session (t=2.43, better
+                              # in 8 of 10). The band is what the evidence
+                              # supports; the exact number is not identifiable
+                              # from ten sessions, so treat it as a starting
+                              # point for the walk and not as a calibration.
+                              # 0 turns it off and restores the old behaviour.
   kill_file: runs/HALT        # `touch runs/HALT` pulls every quote
 
 ibkr:

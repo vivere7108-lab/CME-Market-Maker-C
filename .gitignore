@@ -3,6 +3,7 @@ build-*/
 cmake-build-*/
 .cache/
 compile_commands.json
+__pycache__/
 # Local data & run output
 data_cache/
 runs/

@@ -144,3 +144,12 @@ if(HARVESTER_BUILD_BENCH)
   add_executable(harvester_bench bench/bench.cpp)
   target_link_libraries(harvester_bench PRIVATE harvester_core)
 endif()
+
+# -- the edge probe ------------------------------------------------------------
+# Measures what a passive quote is paid and what it is charged, per sweep,
+# on any GLBX tape. Needs the DBN reader.
+if(HARVESTER_WITH_DATABENTO)
+  add_executable(harvester_edge tools/edge_probe.cpp)
+  target_link_libraries(harvester_edge PRIVATE harvester_core)
+  target_compile_options(harvester_edge PRIVATE -Wall -Wextra)
+endif()

@@ -298,12 +298,49 @@ because the inside was swept is, by construction, on the wrong side of the
 move that swept it. Two kinds of stop, kept apart:
 
 - **pull** — cancel everything now, resume when the condition clears: a
-  stale book, outside the quoting hours (with a flatten at the end of
-  them), the operator's kill file while it exists (`touch runs/HALT`).
+  stale book, realised volatility above `max_sigma`, outside the quoting
+  hours (with a flatten at the end of them), the operator's kill file
+  while it exists (`touch runs/HALT`).
 - **halt** — cancel, flatten if configured, stay stopped until a person
   restarts the process: the daily loss limit, margin past the cap, a
   broker position that disagrees with the book, a position outside the
   cap.
+
+`risk.max_sigma` is the volatility ceiling, in the same points per
+root-second the Avellaneda-Stoikov spread is sized in: above it no quote
+is placed at all. It is the primary gate in `es_paper.yaml`, at 0.25, and
+it is off (`0`) everywhere else.
+
+The reason it is a pull and not a wider spread is what the tape says about
+which fills go wrong. Marking out every sweep that reached a quote one
+tick behind the touch over ten ES sessions, the pre-sweep signals — OFI,
+queue depletion, the aggressor run, VPIN's percentile — separate the
+profitable fills from the unprofitable ones no better than chance: an
+information coefficient of −0.011 against a detection floor of ±0.009, and
+markouts by gate level of +8.90, +7.45, +9.42 and +11.28 dollars from calm
+to extreme, which is not an ordering. Realised volatility does separate
+them, and a logistic regression free to use all of it puts four times the
+weight on vol that it puts on OFI and a coefficient of +0.003 on VPIN.
+Replayed over the same ten sessions, a ceiling in the 0.22–0.30 band is
+worth about $670 a session against quoting through those periods
+(t = 2.43, better in eight of ten), and every one of eleven ceilings tried
+between 0.70 and 0.12 beat quoting without one.
+
+The VPIN gate stays on behind it. On its own it is worth $507 a session —
+not by picking fills, which it cannot do, but by widening the spread and
+cutting size when the tape is busy, which reduces exposure in exactly the
+conditions the ceiling now refuses outright. The two are substitutes: with
+the ceiling in place, turning the gate off costs $131 a session at
+t = −0.55, indistinguishable from zero. It is kept as the backstop for a
+ceiling that is misconfigured or a volatility estimate that has not warmed
+up, and its spread multipliers are not where the money is.
+
+`tools/edge_probe.cpp` (the `harvester_edge` target) is the measurement
+behind all of this: it replays a tape through the live path's own book and
+signals and writes one row per notional fill — the signal state frozen
+before the sweep, the capture, and the markouts that followed — plus, with
+`--samples`, a periodic feature panel. `tools/edge_report.py`,
+`tools/edge_tables.py` and `tools/direction_model.py` aggregate and fit.
 
 At connect the runner adopts the account's position on the contract,
 cancels working orders on it that this process did not place, and refuses
