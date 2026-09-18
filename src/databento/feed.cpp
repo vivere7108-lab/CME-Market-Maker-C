@@ -15,6 +15,7 @@
 #include "harvester/databento/api.hpp"
 #include "harvester/databento/records.hpp"
 #include "harvester/util/log.hpp"
+#include "harvester/util/reconnect.hpp"
 
 namespace harvester {
 
@@ -36,8 +37,9 @@ public:
 
 class DatabentoBookFeed : public RecordFeed {
 public:
-    DatabentoBookFeed(const DatabentoConfig& cfg, const Product& product, int depth)
-        : RecordFeed(cfg.schema, depth), cfg_(cfg), product_(product) {}
+    DatabentoBookFeed(const DatabentoConfig& cfg, const LiveConfig& live, const Product& product, int depth)
+        : RecordFeed(cfg.schema, depth), cfg_(cfg), product_(product),
+          pacer_(live.reconnect_backoff_seconds, live.max_reconnect_backoff_seconds, live.max_reconnect_attempts) {}
 
     ~DatabentoBookFeed() override { close(); }
 
@@ -68,20 +70,27 @@ public:
             client_->Subscribe({cfg_.symbol}, schema, stype);
         }
         client_->Start(
-            [this](databento::Metadata&&) {},
+            [this](databento::Metadata&&) {
+                // The session is up, so whatever failed before it is behind
+                // us: the next failure starts its backoff from the bottom.
+                const std::lock_guard<std::mutex> guard(wait_mutex_);
+                pacer_.succeeded();
+            },
             [this](const databento::Record& record) { return on_record(record); },
-            [this](const std::exception& exc) {
-                ++errors_;
-                HLOG_WARNING(kLog, "databento live session error: {}", exc.what());
-                return cfg_.reconnect ? databento::LiveThreaded::ExceptionAction::Restart
-                                      : databento::LiveThreaded::ExceptionAction::Stop;
-            });
+            [this](const std::exception& exc) { return on_session_error(exc); });
         started_ = true;
         HLOG_INFO(kLog, "databento subscribed to {} {} ({}) with{} snapshot", cfg_.dataset, cfg_.symbol, cfg_.schema,
                   cfg_.snapshot ? "" : "out");
     }
 
     void close() override {
+        {
+            const std::lock_guard<std::mutex> guard(wait_mutex_);
+            closing_ = true;
+        }
+        // A backoff can be minutes long by the time it has doubled a few
+        // times; shutting down must not wait it out.
+        wake_.notify_all();
         if (client_ && started_) {
             try {
                 client_.reset();
@@ -102,6 +111,34 @@ public:
     }
 
 private:
+    // databento-cpp restarts the session the instant this returns Restart --
+    // its loop is a bare `continue` -- so this callback is the only place a
+    // wait can go. Without one, a session the gateway refuses outright (an
+    // unentitled schema, a rejected key) is retried as fast as the socket can
+    // be opened: thousands of attempts a second against the gateway, until
+    // something falls over.
+    databento::LiveThreaded::ExceptionAction on_session_error(const std::exception& exc) {
+        ++errors_;
+        if (!cfg_.reconnect) {
+            HLOG_ERROR(kLog, "databento live session error: {}; databento.reconnect is off, stopping the feed",
+                       exc.what());
+            return databento::LiveThreaded::ExceptionAction::Stop;
+        }
+        std::unique_lock<std::mutex> lock(wait_mutex_);
+        if (closing_) return databento::LiveThreaded::ExceptionAction::Stop;
+        const ReconnectPacer::Step step = pacer_.fail();
+        if (!step.retry) {
+            HLOG_ERROR(kLog, "databento: giving up after {} consecutive session failures: {}", step.attempt,
+                       exc.what());
+            return databento::LiveThreaded::ExceptionAction::Stop;
+        }
+        HLOG_WARNING(kLog, "databento live session error: {}; reconnecting in {:.0f}s (attempt {})", exc.what(),
+                     step.wait_seconds, step.attempt);
+        wake_.wait_for(lock, std::chrono::duration<double>(step.wait_seconds), [this] { return closing_; });
+        return closing_ ? databento::LiveThreaded::ExceptionAction::Stop
+                        : databento::LiveThreaded::ExceptionAction::Restart;
+    }
+
     databento::SType stype_in() const {
         if (cfg_.stype_in == "raw_symbol") return databento::SType::RawSymbol;
         if (cfg_.stype_in == "parent") return databento::SType::Parent;
@@ -168,14 +205,21 @@ private:
     std::mutex symbol_mutex_;
     std::condition_variable symbol_seen_;
     bool symbol_known_ = false;
+    // Reconnect pacing, all under wait_mutex_ and driven from the session
+    // thread; wake_ lets close() cut a backoff short.
+    std::mutex wait_mutex_;
+    std::condition_variable wake_;
+    ReconnectPacer pacer_;
+    bool closing_ = false;
 };
 
 }  // namespace
 
 bool databento_supported() { return true; }
 
-std::shared_ptr<RecordFeed> make_databento_feed(const DatabentoConfig& cfg, const Product& product, int depth) {
-    return std::make_shared<DatabentoBookFeed>(cfg, product, depth);
+std::shared_ptr<RecordFeed> make_databento_feed(const DatabentoConfig& cfg, const LiveConfig& live,
+                                                const Product& product, int depth) {
+    return std::make_shared<DatabentoBookFeed>(cfg, live, product, depth);
 }
 
 }  // namespace harvester

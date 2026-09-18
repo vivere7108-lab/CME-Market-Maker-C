@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -233,7 +234,7 @@ int cmd_doctor(const Args& args) {
         } else {
             std::shared_ptr<RecordFeed> feed;
             try {
-                feed = make_databento_feed(cfg.databento, product, cfg.book.depth);
+                feed = make_databento_feed(cfg.databento, cfg.live, product, cfg.book.depth);
                 feed->start();
                 raw_symbol = feed->wait_for_symbol(20.0);
                 check("feed named the contract", raw_symbol.has_value(),
@@ -511,6 +512,12 @@ void usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // A peer that closes the socket mid-write -- a Databento gateway refusing
+    // the session, IBKR dropping the API connection -- otherwise raises
+    // SIGPIPE, whose default disposition kills the process outright: no
+    // journal flush, no error, just exit 141. Every socket write here already
+    // reports failure through its return value, so the signal is noise.
+    std::signal(SIGPIPE, SIG_IGN);
     const Args args(argc, argv);
     log::set_level(args.verbose() ? log::Level::Debug : log::Level::Info);
     const std::string command = args.command();

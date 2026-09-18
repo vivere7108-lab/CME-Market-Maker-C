@@ -17,7 +17,7 @@ bool databento_supported() { return false; }
 bool dbn_supported() { return false; }
 std::string dbn_schema(const std::string&) { unsupported("reading DBN files"); }
 std::unique_ptr<RecordSource> open_dbn(const std::string&) { unsupported("reading DBN files"); }
-std::shared_ptr<RecordFeed> make_databento_feed(const DatabentoConfig&, const Product&, int) {
+std::shared_ptr<RecordFeed> make_databento_feed(const DatabentoConfig&, const LiveConfig&, const Product&, int) {
     unsupported("the live Databento feed");
 }
 std::uint64_t fetch_dbn(const Config&, const std::string&, const std::string&, const std::string&, const std::string&) {

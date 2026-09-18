@@ -1,6 +1,7 @@
 #include "harvester/replay/pyrandom.hpp"
 #include "harvester/util/format.hpp"
 #include "harvester/util/json.hpp"
+#include "harvester/util/reconnect.hpp"
 #include "helpers.hpp"
 
 using namespace test;
@@ -138,6 +139,53 @@ TEST_CASE("BID64 encodes, prints and parses the way Intel's library does") {
     CHECK(decode(big).coefficient == 9007199254740993ULL);
     CHECK(to_string(big) == "+9007199254740993E+0");
     CHECK(to_double(from_string("1e400")) == std::numeric_limits<double>::infinity());
+}
+
+TEST_CASE("the reconnect pacer waits longer after each consecutive failure") {
+    harvester::ReconnectPacer pacer(15.0, 120.0, std::nullopt);
+    // The first failure waits the base interval, not zero: a gateway that
+    // refuses the session answers instantly, so a zero first wait is the
+    // reconnect storm this paces.
+    const auto first = pacer.fail();
+    CHECK(first.retry);
+    CHECK(first.attempt == 1);
+    CHECK(first.wait_seconds == 15.0);
+    CHECK(pacer.fail().wait_seconds == 30.0);
+    CHECK(pacer.fail().wait_seconds == 60.0);
+    CHECK(pacer.fail().wait_seconds == 120.0);
+    // Capped, however long it keeps failing.
+    CHECK(pacer.fail().wait_seconds == 120.0);
+    CHECK(pacer.attempts() == 5);
+}
+
+TEST_CASE("a session that comes up resets the pacer") {
+    harvester::ReconnectPacer pacer(15.0, 120.0, std::nullopt);
+    pacer.fail();
+    pacer.fail();
+    CHECK(pacer.attempts() == 2);
+    pacer.succeeded();
+    CHECK(pacer.attempts() == 0);
+    // Back to the bottom, so an hourly blip is not paced like an outage.
+    CHECK(pacer.fail().wait_seconds == 15.0);
+}
+
+TEST_CASE("the reconnect pacer gives up after max_reconnect_attempts") {
+    harvester::ReconnectPacer pacer(1.0, 8.0, 3);
+    CHECK(pacer.fail().retry);
+    CHECK(pacer.fail().retry);
+    // The third failure reaches the limit: an error that no amount of
+    // retrying can fix -- an unentitled schema, a rejected key -- stops here
+    // instead of being retried until the process is killed.
+    const auto last = pacer.fail();
+    CHECK_FALSE(last.retry);
+    CHECK(last.attempt == 3);
+    CHECK(last.wait_seconds == 0.0);
+}
+
+TEST_CASE("the reconnect pacer retries indefinitely when no limit is set") {
+    harvester::ReconnectPacer pacer(1.0, 2.0, std::nullopt);
+    for (int i = 0; i < 1000; ++i) CHECK(pacer.fail().retry);
+    CHECK(pacer.attempts() == 1000);
 }
 
 }

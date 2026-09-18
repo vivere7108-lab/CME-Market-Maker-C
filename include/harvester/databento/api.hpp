@@ -18,7 +18,12 @@ bool databento_supported();
 
 // One ``databento`` live session feeding the book on its own thread.
 // ``start()`` subscribes; the API key is read from ``cfg.api_key_env``.
-std::shared_ptr<RecordFeed> make_databento_feed(const DatabentoConfig& cfg, const Product& product, int depth);
+// ``live`` supplies the reconnect pacing -- the same policy the runner
+// applies to the IBKR socket. The feed reconnects on its own thread, inside
+// databento-cpp, so without it nothing sits between a refused session and
+// the next attempt.
+std::shared_ptr<RecordFeed> make_databento_feed(const DatabentoConfig& cfg, const LiveConfig& live,
+                                                const Product& product, int depth);
 
 // Download a tape from Databento's historical API for replay. Returns the
 // file's size in bytes.
