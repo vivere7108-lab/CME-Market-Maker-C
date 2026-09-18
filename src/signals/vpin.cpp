@@ -5,6 +5,7 @@
 #include <format>
 
 #include "harvester/util/format.hpp"
+#include "harvester/util/fsum.hpp"
 
 namespace harvester {
 
@@ -13,9 +14,9 @@ Vpin::Vpin(double bucket_contracts, int window_buckets, const std::string& unkno
 
 std::optional<double> Vpin::value() const {
     if (imbalances_.empty()) return std::nullopt;
-    double total = 0.0;
-    for (const double v : imbalances_) total += v;
-    return total / static_cast<double>(imbalances_.size());
+    // fsum, not a plain loop: this mirrors Python's ``sum(self._imbalances)``,
+    // and on 3.12+ that is compensated. See util/fsum.hpp.
+    return fsum(imbalances_) / static_cast<double>(imbalances_.size());
 }
 
 double Vpin::fill_fraction() const { return std::min((buy_ + sell_) / bucket_, 1.0); }

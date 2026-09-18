@@ -1,5 +1,6 @@
 #include "harvester/replay/pyrandom.hpp"
 #include "harvester/util/format.hpp"
+#include "harvester/util/fsum.hpp"
 #include "harvester/util/json.hpp"
 #include "harvester/util/reconnect.hpp"
 #include "helpers.hpp"
@@ -108,37 +109,24 @@ TEST_CASE("the product converts between points, ticks and fixed prices") {
     CHECK_THROWS_AS(get_product("XX"), UnknownProduct);
 }
 
-}
+TEST_CASE("fsum matches CPython's sum() where a plain loop does not") {
+    // CPython 3.12+ sums floats with Neumaier compensation, so the obvious
+    // translation of sum(xs) -- a += loop -- drifts from it. VPIN is ranked
+    // against its own history and compared to thresholds, so one ulp is
+    // enough to move a reading across a boundary and invent a regime change
+    // the Python implementation does not report.
+    const std::vector<double> tenths(10, 0.1);
+    double naive = 0.0;
+    for (const double v : tenths) naive += v;
+    CHECK(naive == 0.9999999999999999);  // what the loop gives
+    CHECK(harvester::fsum(tenths) == 1.0);  // what Python's sum() gives
 
-#include "harvester/execution/bid64.hpp"
-
-TEST_SUITE("bid64") {
-
-TEST_CASE("BID64 encodes, prints and parses the way Intel's library does") {
-    using namespace harvester::bid64;
-    // Known encodings: 1 = 0x31c0000000000001, 0 = 0x31c0000000000000.
-    CHECK(from_string("1") == 0x31c0000000000001ULL);
-    CHECK(from_string("0") == 0x31c0000000000000ULL);
-    CHECK(to_string(from_string("1")) == "+1E+0");
-    CHECK(to_string(from_string("2.5")) == "+25E-1");
-    CHECK(to_string(from_string("-0.01")) == "-1E-2");
-    CHECK(to_string(from_string("1e3")) == "+1E+3");
-    CHECK(to_double(from_string("2.5")) == 2.5);
-    CHECK(to_double(from_string("9999999999999999")) == 9999999999999999.0);
-    CHECK(to_double(from_string("12345678901234567")) == doctest::Approx(12345678901234568.0));
-    CHECK(to_string(from_double(2.0)) == "+2E+0");
-    CHECK(to_string(from_double(1.5)) == "+15E-1");
-    CHECK(to_string(from_double(-3.0)) == "-3E+0");
-    CHECK(to_double(from_double(4999.75)) == 4999.75);
-    CHECK(decode(from_string("")).nan);
-    CHECK(decode(from_string("abc")).nan);
-    CHECK(to_string(from_string("NaN")) == "+NaN");
-    CHECK(std::isnan(to_double(nan())));
-    // A coefficient above 2^53 uses the second encoding form and round-trips.
-    const Bits big = from_string("9007199254740993");
-    CHECK(decode(big).coefficient == 9007199254740993ULL);
-    CHECK(to_string(big) == "+9007199254740993E+0");
-    CHECK(to_double(from_string("1e400")) == std::numeric_limits<double>::infinity());
+    // The small terms a naive sum drops entirely.
+    const std::vector<double> spread{1.0, 1e100, 1.0, -1e100};
+    double lost = 0.0;
+    for (const double v : spread) lost += v;
+    CHECK(lost == 0.0);
+    CHECK(harvester::fsum(spread) == 2.0);
 }
 
 TEST_CASE("the reconnect pacer waits longer after each consecutive failure") {
@@ -186,6 +174,39 @@ TEST_CASE("the reconnect pacer retries indefinitely when no limit is set") {
     harvester::ReconnectPacer pacer(1.0, 2.0, std::nullopt);
     for (int i = 0; i < 1000; ++i) CHECK(pacer.fail().retry);
     CHECK(pacer.attempts() == 1000);
+}
+
+}
+
+#include "harvester/execution/bid64.hpp"
+
+TEST_SUITE("bid64") {
+
+TEST_CASE("BID64 encodes, prints and parses the way Intel's library does") {
+    using namespace harvester::bid64;
+    // Known encodings: 1 = 0x31c0000000000001, 0 = 0x31c0000000000000.
+    CHECK(from_string("1") == 0x31c0000000000001ULL);
+    CHECK(from_string("0") == 0x31c0000000000000ULL);
+    CHECK(to_string(from_string("1")) == "+1E+0");
+    CHECK(to_string(from_string("2.5")) == "+25E-1");
+    CHECK(to_string(from_string("-0.01")) == "-1E-2");
+    CHECK(to_string(from_string("1e3")) == "+1E+3");
+    CHECK(to_double(from_string("2.5")) == 2.5);
+    CHECK(to_double(from_string("9999999999999999")) == 9999999999999999.0);
+    CHECK(to_double(from_string("12345678901234567")) == doctest::Approx(12345678901234568.0));
+    CHECK(to_string(from_double(2.0)) == "+2E+0");
+    CHECK(to_string(from_double(1.5)) == "+15E-1");
+    CHECK(to_string(from_double(-3.0)) == "-3E+0");
+    CHECK(to_double(from_double(4999.75)) == 4999.75);
+    CHECK(decode(from_string("")).nan);
+    CHECK(decode(from_string("abc")).nan);
+    CHECK(to_string(from_string("NaN")) == "+NaN");
+    CHECK(std::isnan(to_double(nan())));
+    // A coefficient above 2^53 uses the second encoding form and round-trips.
+    const Bits big = from_string("9007199254740993");
+    CHECK(decode(big).coefficient == 9007199254740993ULL);
+    CHECK(to_string(big) == "+9007199254740993E+0");
+    CHECK(to_double(from_string("1e400")) == std::numeric_limits<double>::infinity());
 }
 
 }
