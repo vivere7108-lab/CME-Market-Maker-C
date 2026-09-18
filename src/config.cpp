@@ -158,6 +158,7 @@ void RiskConfig::validate() const {
         fail("risk.max_margin_utilisation must be in (0, 1]");
     }
     if (stale_book_cancel_seconds <= 0) fail("risk.stale_book_cancel_seconds must be > 0");
+    if (max_sigma < 0) fail("risk.max_sigma must be >= 0 (0 turns the ceiling off)");
 }
 
 void IBKRConfig::validate() const {
@@ -398,6 +399,7 @@ Config Config::from_node(const YAML::Node& root) {
         s.read("flatten_outside_hours", cfg.risk.flatten_outside_hours);
         s.read("max_margin_utilisation", cfg.risk.max_margin_utilisation);
         s.read("stale_book_cancel_seconds", cfg.risk.stale_book_cancel_seconds);
+        s.read("max_sigma", cfg.risk.max_sigma);
         s.read("kill_file", cfg.risk.kill_file);
         s.finish();
     }
@@ -596,6 +598,7 @@ std::string Config::to_yaml_string() const {
     e.kv("flatten_outside_hours", risk.flatten_outside_hours);
     e.kv("max_margin_utilisation", risk.max_margin_utilisation);
     e.kv("stale_book_cancel_seconds", risk.stale_book_cancel_seconds);
+    e.kv("max_sigma", risk.max_sigma);
     e.kv("kill_file", risk.kill_file);
     e.section("ibkr");
     e.kv("host", ibkr.host);

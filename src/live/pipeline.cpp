@@ -92,7 +92,8 @@ StepResult Pipeline::step(double now, const BookSnapshot& snapshot, const std::v
     }
 
     // 4. May we quote, and where.
-    Verdict verdict = risk.evaluate(inventory, anchor, feed_age, in_hours, account, broker_position);
+    Verdict verdict = risk.evaluate(inventory, anchor, feed_age, in_hours, account, broker_position,
+                                    vol.warmed_up() ? std::optional<double>(vol.sigma()) : std::nullopt);
     last_verdict = verdict;
     std::optional<QuoteDecision> decision;
     if (verdict.pull || !verdict.quote) {

@@ -115,6 +115,29 @@ TEST_CASE("a stale book pulls but does not halt") {
     CHECK(f.monitor->evaluate(Inventory(es()), 5000.0, 0.1, true).quote);
 }
 
+TEST_CASE("realised vol above the ceiling pulls but does not halt") {
+    RiskFixture f;
+    f.cfg.max_sigma = 0.25;
+    f.monitor = std::make_unique<RiskMonitor>(f.cfg);
+    // Below the ceiling, and while the estimator has not warmed up, quoting
+    // is unaffected; above it, every quote comes off and comes back.
+    CHECK(f.monitor->evaluate(Inventory(es()), 5000.0, 0.1, true, nullptr, std::nullopt, 0.20).quote);
+    CHECK(f.monitor->evaluate(Inventory(es()), 5000.0, 0.1, true, nullptr, std::nullopt, std::nullopt).quote);
+    const Verdict v = f.monitor->evaluate(Inventory(es()), 5000.0, 0.1, true, nullptr, std::nullopt, 0.30);
+    CHECK(v.pull);
+    CHECK_FALSE(v.quote);
+    CHECK_FALSE(v.flatten);
+    CHECK_FALSE(f.monitor->halted);
+    CHECK(f.monitor->evaluate(Inventory(es()), 5000.0, 0.1, true, nullptr, std::nullopt, 0.20).quote);
+}
+
+TEST_CASE("a zero ceiling is off") {
+    RiskFixture f;
+    f.cfg.max_sigma = 0.0;
+    f.monitor = std::make_unique<RiskMonitor>(f.cfg);
+    CHECK(f.monitor->evaluate(Inventory(es()), 5000.0, 0.1, true, nullptr, std::nullopt, 99.0).quote);
+}
+
 TEST_CASE("outside hours pulls and flattens") {
     RiskFixture f;
     Inventory inv(es());

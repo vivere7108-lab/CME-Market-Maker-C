@@ -169,6 +169,12 @@ struct RiskConfig {
     bool flatten_outside_hours = true;
     double max_margin_utilisation = 0.25;
     double stale_book_cancel_seconds = 2.0;
+    // Realised vol, in points per root-second, above which no quote is
+    // placed: the fills taken while the anchor is moving this fast mark
+    // out worst, and the spread the engine widens to does not cover it.
+    // A pull, not a halt -- quoting resumes when vol falls back. Zero is
+    // off, which is the shipped behaviour.
+    double max_sigma = 0.0;
     std::string kill_file = "runs/HALT";
 
     void validate() const;
