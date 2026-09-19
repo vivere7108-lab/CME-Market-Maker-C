@@ -64,6 +64,10 @@ public:
     ToxicityGate gate;
     FlowSignals flow;
     RealisedVol vol;
+    // A second estimate of the same quantity at a different half-life,
+    // built only when ``risk.sigma_halflife_seconds`` asks for one, and
+    // read by the ceiling instead of ``vol``. See config.hpp.
+    std::optional<RealisedVol> risk_vol;
     QuoteEngine engine;
     MessageBudget budget;
     ActionQueue queue;

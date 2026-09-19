@@ -22,6 +22,11 @@ Pipeline::Pipeline(const Config& cfg_, Broker& broker_, ClockFn clock, SessionJo
       gate(cfg.toxicity),
       flow(cfg.flow),
       vol(cfg.quoting.vol_halflife_seconds, cfg.quoting.vol_sample_ms, cfg.quoting.vol_floor, cfg.quoting.vol_ceiling),
+      risk_vol(cfg.risk.sigma_halflife_seconds > 0.0
+                   ? std::optional<RealisedVol>(std::in_place, cfg.risk.sigma_halflife_seconds,
+                                                cfg.quoting.vol_sample_ms, cfg.quoting.vol_floor,
+                                                cfg.quoting.vol_ceiling)
+                   : std::nullopt),
       engine(cfg.quoting, cfg.risk, product, cfg.book.anchor, cfg.toxicity.extreme_action),
       budget(cfg.execution.max_messages_per_second, cfg.execution.burst, clock),
       queue(budget),
@@ -57,6 +62,7 @@ StepResult Pipeline::step(double now, const BookSnapshot& snapshot, const std::v
     if (snapshot.two_sided()) {
         flow.on_book(snapshot);
         vol.update(*anchor, snapshot.ts_event);
+        if (risk_vol) risk_vol->update(*anchor, snapshot.ts_event);
     }
     if (simulated != nullptr) simulated->on_book(snapshot);
 
@@ -93,8 +99,9 @@ StepResult Pipeline::step(double now, const BookSnapshot& snapshot, const std::v
     }
 
     // 4. May we quote, and where.
+    const RealisedVol& gate_vol = risk_vol ? *risk_vol : vol;
     Verdict verdict = risk.evaluate(inventory, anchor, feed_age, in_hours, account, broker_position,
-                                    vol.warmed_up() ? std::optional<double>(vol.sigma()) : std::nullopt,
+                                    gate_vol.warmed_up() ? std::optional<double>(gate_vol.sigma()) : std::nullopt,
                                     external.empty() ? std::nullopt : external.at(snapshot.ts_event));
     last_verdict = verdict;
     std::optional<QuoteDecision> decision;

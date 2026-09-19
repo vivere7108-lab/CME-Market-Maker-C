@@ -182,6 +182,23 @@ struct RiskConfig {
     // A pull, not a halt -- quoting resumes when vol falls back. Zero is
     // off, which is the shipped behaviour.
     double max_sigma = 0.0;
+    // The half-life, in seconds, of the realised-vol estimate the
+    // ``max_sigma`` ceiling reads. Zero means "whatever the quoter uses",
+    // which is the shipped behaviour and one estimator for both jobs.
+    //
+    // They want different speeds. The ceiling wants to know that the
+    // regime has changed, and at the quoter's 30s half-life a doubling of
+    // variance takes 35.8s to cross a ceiling 25% above the old level.
+    // The spread wants a stable number, because the ``gamma sigma^2 T``
+    // term goes straight into the quote and a fast estimate makes it
+    // jitter. Over ten ES sessions, feeding the ceiling a 10-20s estimate
+    // while the spread kept the 30s one was worth +$380 a session (se
+    // 158, better in 8 of 10); moving BOTH to 10-20s by changing
+    // ``quoting.vol_halflife_seconds`` was worth +$21 (se 124), because
+    // the gate's gain and the spread's loss cancel.
+    //
+    // The sample interval is the quoter's ``vol_sample_ms`` either way.
+    double sigma_halflife_seconds = 0.0;
     // A measurement hook, not a shipped gate: a CSV of ``ts_ns,value``
     // beside the tape, and the ceiling on that value above which no quote
     // is placed. It lets a rule fitted offline be scored on the real

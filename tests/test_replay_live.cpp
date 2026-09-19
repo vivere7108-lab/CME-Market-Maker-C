@@ -189,6 +189,44 @@ TEST_CASE("a fill updates the inventory and the markouts") {
     CHECK(p.markouts.rows[0].complete());
 }
 
+TEST_CASE("the ceiling can read a faster vol estimate than the spread does") {
+    // Same price path into two pipelines. One shares the quoter's 30s
+    // estimate with the ceiling, the other gives the ceiling a 1s one.
+    // After a burst of movement the fast estimate is higher, so the
+    // ceiling set between the two pulls one and not the other.
+    const auto drive = [](double risk_halflife) {
+        Config cfg = test_config();
+        cfg.risk.sigma_halflife_seconds = risk_halflife;
+        cfg.risk.max_sigma = 0.0;  // measure sigma first, gate in the next pass
+        ScriptedBroker broker;
+        auto p = std::make_unique<Pipeline>(cfg, broker, [] { return 0.0; });
+        double price = 5000.0;
+        std::int64_t ts = 0;
+        // One vol sample a second, well inside the estimator's band so
+        // neither estimate is clamped: 200s of one-tick steps, then 8s of
+        // four-tick ones.
+        for (int i = 0; i < 200; ++i) {
+            price += (i % 2 ? 0.25 : -0.25);
+            ts += 1'000'000'000;
+            p->step(static_cast<double>(ts) / 1e9, snapshot(price, 10, price + 0.25, 10, ts), {}, true, 0.1);
+        }
+        for (int i = 0; i < 8; ++i) {
+            price += (i % 2 ? 1.0 : -1.0);
+            ts += 1'000'000'000;
+            p->step(static_cast<double>(ts) / 1e9, snapshot(price, 10, price + 0.25, 10, ts), {}, true, 0.1);
+        }
+        return p;
+    };
+    const auto slow = drive(0.0);
+    const auto fast = drive(1.0);
+    REQUIRE_FALSE(slow->risk_vol.has_value());
+    REQUIRE(fast->risk_vol.has_value());
+    // Both saw the same path, so the quoter's estimate is the same; only
+    // the ceiling's differs, and the short half-life is further along.
+    CHECK(fast->vol.sigma() == doctest::Approx(slow->vol.sigma()));
+    CHECK(fast->risk_vol->sigma() > fast->vol.sigma() * 1.5);
+}
+
 TEST_CASE("outside hours flattens through the broker") {
     Config cfg = test_config();
     ScriptedBroker broker;
