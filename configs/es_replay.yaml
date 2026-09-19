@@ -25,9 +25,11 @@ toxicity:
 
 quoting:
   gamma: 0.05
-  kappa: 1.5
+  kappa: 1.5                  # the depth dial, not a fill-intensity parameter;
+                              # see es_paper.yaml. Fitting it to the tape loses
+                              # $1,324 a session. Do not.
   horizon_seconds: 60.0
-  behind_best_ticks: 1
+  behind_best_ticks: 1        # a floor; the quote sits a median 3 ticks back
   max_behind_ticks: 8
   base_size: 1
   max_size: 1

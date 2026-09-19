@@ -64,15 +64,40 @@ flow:
 
 quoting:
   gamma: 0.05                 # risk aversion, per point
-  kappa: 1.5                  # order-arrival decay, per point
+  kappa: 1.5                  # the depth dial, not the order-arrival decay the
+                              # Avellaneda-Stoikov paper names. (2/gamma)ln(1 +
+                              # gamma/kappa) is 1.31 of the 1.42 points this
+                              # quotes, so kappa sets where the quote sits and
+                              # the sigma term only trims it. The tape's own
+                              # fill-intensity curve implies 6-7, and is not
+                              # exponential at all -- it decays at 12.9/point
+                              # over the first tick and ~3 over the last two, so
+                              # no single kappa describes it. Replaying kappa
+                              # 6.2 over ten ES sessions LOSES $1,324 a session
+                              # (t=-3.26, worse in 8 of 10): A-S assumes a
+                              # fill's information content does not depend on
+                              # distance, and on ES that is the whole game.
+                              # Do not estimate this from the tape. If the
+                              # quote should sit somewhere else, move it with
+                              # quoting.external_half_file, which says what it
+                              # means in ticks.
   horizon_seconds: 60.0       # how long a position is expected to be held
   vol_halflife_seconds: 30.0
   vol_sample_ms: 250.0
   vol_floor: 0.02
   vol_ceiling: 2.0
   min_half_spread_ticks: 1.0
-  behind_best_ticks: 1        # never at the touch: one tick behind it
-  max_behind_ticks: 8         # further than this is not quoted
+  behind_best_ticks: 1        # a floor on politeness, not where the quote sits.
+                              # raw_bid = min(r - half, best_bid - behind), and
+                              # the half-spread above is ~2.6 ticks, so this
+                              # binds 9% of the time; the live bid's median
+                              # distance is 3 ticks behind the touch (1t 9%,
+                              # 2t 22%, 3t 27%, 4t 24%, 5t and out 19%).
+  max_behind_ticks: 8         # further than this is not quoted. This collides
+                              # with toxicity.spread_multiplier: at `toxic` the
+                              # 2.5x takes the half-spread past 7 ticks, so the
+                              # gate partly acts as a pull through this cap
+                              # rather than as a widening. Unmeasured.
   base_size: 1
   max_size: 1
   skew_ofi_ticks: 1.0
