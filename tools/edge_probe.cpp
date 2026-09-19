@@ -138,6 +138,17 @@ struct Sample {
     std::int64_t volume_1s = 0, signed_volume_1s = 0;
     // Where the mid has just been, in ticks: the bounce and the drift.
     double r_prev_100ms = 0.0, r_prev_1s = 0.0;
+    // The self-exciting arrival intensity of aggressive market orders --
+    // a Hawkes kernel sum, exp(-(t - t_i)/tau) over sweep starts, kept
+    // exactly at trade resolution rather than counted in the sample
+    // window.  Two timescales because ES's kernel is not one.
+    double mo_fast = 0.0, mo_slow = 0.0;      // per sweep
+    double mv_fast = 0.0, mv_slow = 0.0;      // weighted by contracts
+    // What is resting 0..5 ticks behind each touch: the level size a quote
+    // would have to queue behind, which with `queue_position: back` IS its
+    // position in the queue.
+    std::int32_t bid_sz[NB] = {0};
+    std::int32_t ask_sz[NB] = {0};
     double seconds_into_tape = 0.0;
     double fwd_mid[NH];
     double fwd_micro[NH];
@@ -329,6 +340,7 @@ private:
                 return;
             }
             ++sweeps;
+            excite_arrival();
             sweep_ = Sweep{};
             sweep_.valid = true;
             sweep_.aggressor = trade.aggressor;
@@ -349,6 +361,7 @@ private:
         }
         if (!sweep_.valid) return;
         sweep_.last_ts = trade.ts_event;
+        excite_volume(trade.size);
         sweep_.contracts += trade.size;
         ++sweep_.trades;
         sweep_contracts += trade.size;
@@ -434,6 +447,41 @@ private:
         }
     }
 
+    // Decay the kernel sums to ``now_``.  O(1), and exact for an
+    // exponential kernel however irregular the arrivals are.
+    void decay_hawkes() {
+        if (hawkes_ts_ == 0) { hawkes_ts_ = now_; return; }
+        const double dt = static_cast<double>(now_ - hawkes_ts_) / 1e9;
+        if (dt <= 0) return;
+        hawkes_ts_ = now_;
+        const double f = std::exp(-dt / kFastTau), s = std::exp(-dt / kSlowTau);
+        mo_fast_ *= f; mv_fast_ *= f;
+        mo_slow_ *= s; mv_slow_ *= s;
+    }
+
+    void excite_arrival() {
+        decay_hawkes();
+        mo_fast_ += 1.0; mo_slow_ += 1.0;
+    }
+
+    void excite_volume(std::int32_t contracts) {
+        decay_hawkes();
+        mv_fast_ += contracts; mv_slow_ += contracts;
+    }
+
+    // The resting size at each tick offset behind a touch.
+    void level_sizes(const BookSnapshot& book, int side, std::int32_t* out) const {
+        const double tick = product_.tick_size;
+        const double best = side > 0 ? book.best_bid()->price : book.best_ask()->price;
+        for (int i = 0; i < NB; ++i) out[i] = 0;
+        const auto levels = side > 0 ? book.bids() : book.asks();
+        for (const Level& level : levels) {
+            const double away = side > 0 ? (best - level.price) : (level.price - best);
+            const int k = static_cast<int>(std::lround(away / tick));
+            if (k >= 0 && k < NB) out[k] += level.size;
+        }
+    }
+
     void trim_windows() {
         const std::int64_t cutoff = now_ - 1'000'000'000;
         while (!tape_.empty() && std::get<0>(tape_.front()) < cutoff) tape_.pop_front();
@@ -492,6 +540,11 @@ private:
             s.volume_1s += size;
             s.signed_volume_1s += static_cast<std::int64_t>(size) * agg;
         }
+        decay_hawkes();
+        s.mo_fast = mo_fast_; s.mo_slow = mo_slow_;
+        s.mv_fast = mv_fast_; s.mv_slow = mv_slow_;
+        level_sizes(cur_, 1, s.bid_sz);
+        level_sizes(cur_, -1, s.ask_sz);
         s.r_prev_100ms = (mid - mid_ago(100'000'000)) / tick;
         s.r_prev_1s = (mid - mid_ago(1'000'000'000)) / tick;
         s.seconds_into_tape = static_cast<double>(now_ - first_ts) / 1e9;
@@ -539,6 +592,9 @@ private:
                      s.depletion, s.run, static_cast<long long>(s.run_length), s.vpin, s.vpin_pct, s.tox,
                      s.warm ? 1 : 0, s.sigma, s.trades_1s, static_cast<long long>(s.volume_1s),
                      static_cast<long long>(s.signed_volume_1s), s.r_prev_100ms, s.r_prev_1s, s.seconds_into_tape);
+        std::fprintf(samples_out_, ",%.6g,%.6g,%.6g,%.6g", s.mo_fast, s.mo_slow, s.mv_fast, s.mv_slow);
+        for (int i = 0; i < NB; ++i) std::fprintf(samples_out_, ",%d", s.bid_sz[i]);
+        for (int i = 0; i < NB; ++i) std::fprintf(samples_out_, ",%d", s.ask_sz[i]);
         for (int h = 0; h < NH; ++h) {
             if (s.have[h]) std::fprintf(samples_out_, ",%.6g", s.fwd_mid[h]);
             else std::fprintf(samples_out_, ",");
@@ -607,6 +663,10 @@ private:
     std::int64_t next_sample_ts_ = 0;
     std::int64_t sample_ns_ = 0;
     std::FILE* samples_out_ = nullptr;
+    // The Hawkes kernel sums, and the instant they were last decayed to.
+    static constexpr double kFastTau = 0.5, kSlowTau = 10.0;
+    double mo_fast_ = 0.0, mo_slow_ = 0.0, mv_fast_ = 0.0, mv_slow_ = 0.0;
+    std::int64_t hawkes_ts_ = 0;
     // The tape and the mid over the last second, for the window features.
     std::deque<std::tuple<std::int64_t, std::int32_t, int>> tape_;
     std::deque<std::pair<std::int64_t, double>> mids_;
@@ -632,6 +692,9 @@ std::string sample_header() {
         "ts,mid,micro_off,spread_ticks,imb1,imb5,imb10,bid1,ask1,bid5,ask5,"
         "ofi,depletion,run,run_length,vpin,vpin_pct,tox,warm,sigma,trades_1s,volume_1s,signed_volume_1s,"
         "r_prev_100ms,r_prev_1s,seconds_into_tape";
+    h += ",mo_fast,mo_slow,mv_fast,mv_slow";
+    for (int i = 0; i < NB; ++i) h += ",bid_sz_" + std::to_string(i);
+    for (int i = 0; i < NB; ++i) h += ",ask_sz_" + std::to_string(i);
     for (int i = 0; i < NH; ++i) h += ",fwd_mid_" + std::to_string(i);
     for (int i = 0; i < NH; ++i) h += ",fwd_micro_" + std::to_string(i);
     return h;
