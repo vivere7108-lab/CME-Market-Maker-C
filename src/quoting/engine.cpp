@@ -36,7 +36,9 @@ std::string QuoteDecision::describe(const Product& product) const {
 QuoteEngine::QuoteEngine(const QuotingConfig& cfg_, const RiskConfig& risk_, const Product& product_,
                          const std::string& anchor, const std::string& extreme_action)
     : cfg(cfg_), risk(risk_), product(product_), anchor_is_microprice(anchor == "microprice"),
-      extreme_pull(extreme_action == "pull") {}
+      extreme_pull(extreme_action == "pull"),
+      external_half(cfg_.external_half_file.empty() ? ExternalSeries()
+                                                    : ExternalSeries(cfg_.external_half_file)) {}
 
 double QuoteEngine::reservation(double anchor, int inventory, double sigma) const {
     return anchor - inventory * cfg.gamma * sigma * sigma * cfg.horizon_seconds;
@@ -64,6 +66,12 @@ QuoteDecision QuoteEngine::decide(const BookSnapshot& snapshot, double sigma, co
 
     double r = reservation(anchor, inventory, sigma);
     double half = model_spread(sigma) / 2.0;
+    // A depth policy fitted offline stands in for the model spread; what
+    // follows -- the toxicity multiplier, the floor, the snap outwards --
+    // is unchanged, so the arms differ only in how far back they aim.
+    if (!external_half.empty()) {
+        if (const auto ticks = external_half.at(snapshot.ts_event)) half = *ticks * tick;
+    }
     half *= toxicity.spread_multiplier;
     half = std::max(half, cfg.min_half_spread_ticks * tick);
 

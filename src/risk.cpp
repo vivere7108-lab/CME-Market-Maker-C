@@ -21,7 +21,7 @@ void RiskMonitor::halt(const std::string& reason) {
 
 Verdict RiskMonitor::evaluate(const Inventory& inventory, std::optional<double> mark, double feed_age_seconds,
                               bool in_hours, const AccountValues* account, std::optional<int> broker_position,
-                              std::optional<double> sigma) {
+                              std::optional<double> sigma, std::optional<double> external) {
     const RiskConfig& cfg = cfg_;
     if (halted) return Verdict{false, true, cfg.flatten_on_halt && inventory.position != 0, halt_reason};
 
@@ -64,6 +64,10 @@ Verdict RiskMonitor::evaluate(const Inventory& inventory, std::optional<double> 
     if (cfg.max_sigma > 0.0 && sigma && *sigma > cfg.max_sigma) {
         return Verdict{false, true, false,
                        std::format("realised vol {:.3f} is above the {:.3f} ceiling", *sigma, cfg.max_sigma)};
+    }
+    if (cfg.max_external > 0.0 && external && *external > cfg.max_external) {
+        return Verdict{false, true, false,
+                       std::format("external gate {:.4f} is above the {:.4f} ceiling", *external, cfg.max_external)};
     }
     if (feed_age_seconds > cfg.stale_book_cancel_seconds) {
         return Verdict{false, true, false, std::format("book is {:.1f}s stale", feed_age_seconds)};

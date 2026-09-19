@@ -159,6 +159,9 @@ void RiskConfig::validate() const {
     }
     if (stale_book_cancel_seconds <= 0) fail("risk.stale_book_cancel_seconds must be > 0");
     if (max_sigma < 0) fail("risk.max_sigma must be >= 0 (0 turns the ceiling off)");
+    if (max_external != 0.0 && external_file.empty()) {
+        fail("risk.max_external is set but risk.external_file is empty");
+    }
 }
 
 void IBKRConfig::validate() const {
@@ -375,6 +378,7 @@ Config Config::from_node(const YAML::Node& root) {
         s.read("skew_ofi_ticks", cfg.quoting.skew_ofi_ticks);
         s.read("skew_depletion_ticks", cfg.quoting.skew_depletion_ticks);
         s.read("skew_run_ticks", cfg.quoting.skew_run_ticks);
+        s.read("external_half_file", cfg.quoting.external_half_file);
         s.finish();
     }
     {
@@ -400,6 +404,8 @@ Config Config::from_node(const YAML::Node& root) {
         s.read("max_margin_utilisation", cfg.risk.max_margin_utilisation);
         s.read("stale_book_cancel_seconds", cfg.risk.stale_book_cancel_seconds);
         s.read("max_sigma", cfg.risk.max_sigma);
+        s.read("external_file", cfg.risk.external_file);
+        s.read("max_external", cfg.risk.max_external);
         s.read("kill_file", cfg.risk.kill_file);
         s.finish();
     }
@@ -580,6 +586,7 @@ std::string Config::to_yaml_string() const {
     e.kv("skew_ofi_ticks", quoting.skew_ofi_ticks);
     e.kv("skew_depletion_ticks", quoting.skew_depletion_ticks);
     e.kv("skew_run_ticks", quoting.skew_run_ticks);
+    e.kv("external_half_file", quoting.external_half_file);
     e.section("execution");
     e.kv("max_messages_per_second", execution.max_messages_per_second);
     e.kv("burst", execution.burst);
@@ -599,6 +606,8 @@ std::string Config::to_yaml_string() const {
     e.kv("max_margin_utilisation", risk.max_margin_utilisation);
     e.kv("stale_book_cancel_seconds", risk.stale_book_cancel_seconds);
     e.kv("max_sigma", risk.max_sigma);
+    e.kv("external_file", risk.external_file);
+    e.kv("max_external", risk.max_external);
     e.kv("kill_file", risk.kill_file);
     e.section("ibkr");
     e.kv("host", ibkr.host);

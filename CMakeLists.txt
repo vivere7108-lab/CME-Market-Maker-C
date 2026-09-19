@@ -60,6 +60,7 @@ add_library(harvester_core STATIC
   src/book/feed.cpp
   src/signals/vpin.cpp
   src/signals/flow.cpp
+  src/signals/external.cpp
   src/quoting/engine.cpp
   src/execution/throttle.cpp
   src/execution/quotes.cpp
