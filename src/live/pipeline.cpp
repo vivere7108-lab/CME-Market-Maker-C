@@ -29,6 +29,7 @@ Pipeline::Pipeline(const Config& cfg_, Broker& broker_, ClockFn clock, SessionJo
       inventory(product),
       markouts(product),
       risk(cfg.risk),
+      external(cfg_.risk.external_file.empty() ? ExternalSeries() : ExternalSeries(cfg_.risk.external_file)),
       clock_(std::move(clock)) {
     kept_events_.reserve(16);
     flatten_fills_.reserve(4);
@@ -93,7 +94,8 @@ StepResult Pipeline::step(double now, const BookSnapshot& snapshot, const std::v
 
     // 4. May we quote, and where.
     Verdict verdict = risk.evaluate(inventory, anchor, feed_age, in_hours, account, broker_position,
-                                    vol.warmed_up() ? std::optional<double>(vol.sigma()) : std::nullopt);
+                                    vol.warmed_up() ? std::optional<double>(vol.sigma()) : std::nullopt,
+                                    external.empty() ? std::nullopt : external.at(snapshot.ts_event));
     last_verdict = verdict;
     std::optional<QuoteDecision> decision;
     if (verdict.pull || !verdict.quote) {

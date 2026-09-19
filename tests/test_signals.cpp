@@ -1,3 +1,7 @@
+#include <filesystem>
+#include <fstream>
+
+#include "harvester/signals/external.hpp"
 #include "harvester/signals/flow.hpp"
 #include "harvester/signals/vol.hpp"
 #include "harvester/signals/vpin.hpp"
@@ -261,4 +265,22 @@ TEST_CASE("flow signals update together") {
     CHECK(s.composite() == doctest::Approx((s.ofi + s.depletion + s.run) / 3.0));
 }
 
+}
+
+// -- an offline rule read beside the tape --------------------------------
+
+TEST_CASE("an external series reads as it stood at or before the clock") {
+    const std::string path = "external_series_test.csv";
+    {
+        std::ofstream out(path);
+        out << "ts,value\n1000,0.5\n2000,1.5\n3000,2.5\n";
+    }
+    const ExternalSeries series(path);
+    CHECK(series.size() == 3);
+    CHECK_FALSE(series.at(999).has_value());   // before the first row
+    CHECK(series.at(1000).value() == doctest::Approx(0.5));
+    CHECK(series.at(1999).value() == doctest::Approx(0.5));  // never ahead of the tape
+    CHECK(series.at(2000).value() == doctest::Approx(1.5));
+    CHECK(series.at(9999).value() == doctest::Approx(2.5));  // and never expires
+    std::filesystem::remove(path);
 }

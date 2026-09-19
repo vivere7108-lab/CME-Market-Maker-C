@@ -138,6 +138,13 @@ struct QuotingConfig {
     double skew_ofi_ticks = 1.0;
     double skew_depletion_ticks = 1.0;
     double skew_run_ticks = 0.5;
+    // The same measurement hook as ``risk.external_file``, for the other
+    // half of the decision: a CSV of ``ts_ns,half_spread_ticks`` that
+    // stands in for the Avellaneda-Stoikov spread, so a depth policy
+    // fitted offline can be replayed before it is implemented here. The
+    // toxicity multiplier and ``min_half_spread_ticks`` still apply on
+    // top. Empty is off, which is every configuration that ships.
+    std::string external_half_file;
 
     void validate() const;
 };
@@ -175,6 +182,13 @@ struct RiskConfig {
     // A pull, not a halt -- quoting resumes when vol falls back. Zero is
     // off, which is the shipped behaviour.
     double max_sigma = 0.0;
+    // A measurement hook, not a shipped gate: a CSV of ``ts_ns,value``
+    // beside the tape, and the ceiling on that value above which no quote
+    // is placed. It lets a rule fitted offline be scored on the real
+    // engine before it is implemented in it. Empty path, or a zero
+    // ceiling, is off -- which is every configuration that ships.
+    std::string external_file;
+    double max_external = 0.0;
     std::string kill_file = "runs/HALT";
 
     void validate() const;

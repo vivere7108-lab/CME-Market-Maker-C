@@ -1,4 +1,6 @@
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <functional>
 
 #include "harvester/quoting/engine.hpp"
@@ -194,6 +196,30 @@ TEST_CASE("describe prints the decision") {
     REQUIRE(d.ask.has_value());
     CHECK(text.find(std::format("bid 1@{:.2f} | ask 1@{:.2f} | anchor 5000.125", d.bid->price, d.ask->price)) == 0);
     CHECK(text.find("[calm]") != std::string::npos);
+}
+
+
+TEST_CASE("an offline depth policy stands in for the model spread") {
+    const std::string path = "external_half_test.csv";
+    {
+        std::ofstream out(path);
+        out << "ts,half_ticks\n0,4\n";
+    }
+    EngineFixture wide("reduce_only", [&](QuotingConfig& c) {
+        c.external_half_file = path;
+        c.min_half_spread_ticks = 0.5;
+    });
+    EngineFixture model("reduce_only", [](QuotingConfig& c) { c.min_half_spread_ticks = 0.5; });
+    const BookSnapshot s = snapshot(5000.0, 20, 5000.25, 20);
+    const QuoteDecision a = wide.decide(s, 0.2, FLAT, tox(), 0);
+    const QuoteDecision b = model.decide(s, 0.2, FLAT, tox(), 0);
+    // Four ticks is wider than the A-S spread at this vol, so the quote
+    // moves out; everything else about the decision is the same path.
+    CHECK(a.half_spread.value() == doctest::Approx(4 * es().tick_size));
+    CHECK(a.half_spread.value() > b.half_spread.value());
+    CHECK(a.bid->price < b.bid->price);
+    CHECK(a.ask->price > b.ask->price);
+    std::filesystem::remove(path);
 }
 
 }

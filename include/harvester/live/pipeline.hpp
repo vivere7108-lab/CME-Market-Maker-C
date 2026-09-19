@@ -26,6 +26,7 @@
 #include "harvester/live/journal.hpp"
 #include "harvester/quoting/engine.hpp"
 #include "harvester/risk.hpp"
+#include "harvester/signals/external.hpp"
 #include "harvester/signals/flow.hpp"
 #include "harvester/signals/vol.hpp"
 #include "harvester/signals/vpin.hpp"
@@ -70,6 +71,10 @@ public:
     Inventory inventory;
     MarkoutTracker markouts;
     RiskMonitor risk;
+    // Empty unless ``risk.external_file`` names one: an offline rule read
+    // beside the tape so that it can be gated on without being
+    // implemented here. See signals/external.hpp.
+    ExternalSeries external;
 
     std::optional<BookSnapshot> last_snapshot;
     std::optional<QuoteDecision> last_decision;

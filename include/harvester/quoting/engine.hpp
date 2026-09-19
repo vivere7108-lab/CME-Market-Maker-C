@@ -34,6 +34,7 @@
 #include "harvester/book/book.hpp"
 #include "harvester/config.hpp"
 #include "harvester/instruments.hpp"
+#include "harvester/signals/external.hpp"
 #include "harvester/signals/flow.hpp"
 #include "harvester/signals/vpin.hpp"
 
@@ -82,6 +83,9 @@ public:
     const Product& product;
     bool anchor_is_microprice;
     bool extreme_pull;
+    // Empty unless ``quoting.external_half_file`` names one. See
+    // signals/external.hpp: a depth policy measured before it is written.
+    ExternalSeries external_half;
 };
 
 }  // namespace harvester

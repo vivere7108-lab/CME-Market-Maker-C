@@ -2,7 +2,8 @@
 //
 // * **pull** -- cancel every quote now, resume when the condition clears.
 //   A stale book, outside the quoting hours, realised vol above
-//   ``max_sigma``, the operator's kill file while it exists.
+//   ``max_sigma``, an offline rule past ``max_external``, the operator's
+//   kill file while it exists.
 // * **halt** -- cancel, optionally flatten, and stay stopped until a
 //   person restarts the process.  The daily loss limit, margin past the
 //   utilisation cap, a position the account holds that the book cannot
@@ -45,7 +46,7 @@ public:
     // ceiling cannot be applied to a number that is still the floor.
     Verdict evaluate(const Inventory& inventory, std::optional<double> mark, double feed_age_seconds, bool in_hours,
                      const AccountValues* account = nullptr, std::optional<int> broker_position = std::nullopt,
-                     std::optional<double> sigma = std::nullopt);
+                     std::optional<double> sigma = std::nullopt, std::optional<double> external = std::nullopt);
 
     const RiskConfig& cfg() const { return cfg_; }
     bool halted = false;
