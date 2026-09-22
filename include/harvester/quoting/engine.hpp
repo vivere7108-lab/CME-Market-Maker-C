@@ -17,7 +17,10 @@
 // 5. **Cooperative placement.**  The bid is capped at ``behind_best_ticks``
 //    below the best bid and the ask floored at the same above the best
 //    ask, then snapped outwards to the tick.  A side that lands more than
-//    ``max_behind_ticks`` away is not quoted.
+//    ``max_behind_ticks`` away is not quoted -- except the side flattening
+//    out of an ``extreme`` regime, which is exempt: that level's own spread
+//    multiplier puts it past the cap, and dropping it leaves the position
+//    with no passive way out.
 // 6. **Inventory.**  Past ``reduce_only_position`` only the flattening side
 //    is quoted; no fill may take the position past ``max_position``.
 //
@@ -86,6 +89,7 @@ public:
     // Empty unless ``quoting.external_half_file`` names one. See
     // signals/external.hpp: a depth policy measured before it is written.
     ExternalSeries external_half;
+    ExternalSeries external_skew;
 };
 
 }  // namespace harvester

@@ -1,6 +1,7 @@
 // Command line entry point.
 //
 //     harvester replay  -c configs/es_replay.yaml                 # generated market
+//     harvester replay  -c configs/es_replay.yaml --control       # ...and the gate/skew/both controls
 //     harvester replay  -c configs/es_replay.yaml --dbn es.dbn    # a recorded tape
 //     harvester fetch   -c configs/es_replay.yaml --start 2026-09-08T13:30 --end 2026-09-08T20:00 -o es.dbn
 //     harvester doctor  -c configs/es_paper.yaml                  # preflight, places nothing
@@ -102,6 +103,41 @@ std::string config_name(const Args& args) { return args.value("--config", "-c").
 
 // -- replay ------------------------------------------------------------------
 
+// The control arms. ``--control`` used to turn the toxicity gate off and
+// the flow skews to zero in one go and print a single difference, which is
+// the two changes added together: the skews had never been run as an arm
+// of their own. They are not the same kind of thing -- the gate widens the
+// spread and cuts size in a busy tape, the skews move the quote sideways
+// and are what unsticks it -- so each gets its own run, and ``both`` is
+// still there because it is what the old flag measured.
+struct ControlArm {
+    const char* name;
+    const char* label;   // what the difference is against
+    const char* lead;    // what the difference is called
+    bool gate;           // leave the toxicity gate on
+    bool skew;           // leave the flow skews on
+};
+
+constexpr ControlArm CONTROL_ARMS[] = {
+    {"gate", "gate off, skews intact, same tape", "gate", false, true},
+    {"skew", "skews at zero, gate on, same tape", "skews", true, false},
+    {"both", "gate off, no skew, same tape", "signals", false, false},
+};
+
+void run_control(const Config& cfg, const ReplayResult& result, const ControlArm& arm) {
+    Config control = cfg;
+    if (!arm.gate) control.toxicity.enabled = false;
+    if (!arm.skew) {
+        control.quoting.skew_ofi_ticks = control.quoting.skew_depletion_ticks = 0.0;
+        control.quoting.skew_run_ticks = 0.0;
+    }
+    const ReplayResult base = run_replay(control, nullptr);
+    std::cout << std::format("\n--- control: {} ---\n", arm.label) << base.summary() << "\n";
+    const double delta = result.net() - base.net();
+    std::cout << std::format("\n{}: net ${}{} against the control ({} vs {} fills)\n", arm.lead,
+                             delta >= 0 ? "+" : "", fmt::commas(delta), result.fills, base.fills);
+}
+
 int cmd_replay(const Args& args) {
     const Config cfg = load(args);
     std::unique_ptr<SessionJournal> journal;
@@ -110,19 +146,22 @@ int cmd_replay(const Args& args) {
     }
     const ReplayResult result = run_replay(cfg, journal.get());
     std::cout << "\n" << result.summary() << "\n";
-    if (args.flag("--control")) {
-        // The same tape with the toxicity gate off and the flow skews at
-        // zero: what the quotes do with no order-flow awareness at all.
-        // The difference between the two is what the signals bought.
-        Config control = cfg;
-        control.toxicity.enabled = false;
-        control.quoting.skew_ofi_ticks = control.quoting.skew_depletion_ticks = 0.0;
-        control.quoting.skew_run_ticks = 0.0;
-        const ReplayResult base = run_replay(control, nullptr);
-        std::cout << "\n--- control: gate off, no skew, same tape ---\n" << base.summary() << "\n";
-        const double delta = result.net() - base.net();
-        std::cout << std::format("\nsignals: net ${}{} against the control ({} vs {} fills)\n", delta >= 0 ? "+" : "",
-                                 fmt::commas(delta), result.fills, base.fills);
+    // ``--control`` runs every arm; ``--control gate|skew|both`` runs one.
+    std::optional<std::string> which = args.value("--control");
+    if (which && (which->empty() || which->starts_with("-"))) which.reset();
+    if (args.flag("--control") || which) {
+        const std::string wanted = which.value_or("all");
+        bool ran = false;
+        for (const ControlArm& arm : CONTROL_ARMS) {
+            if (wanted == "all" || wanted == arm.name) {
+                run_control(cfg, result, arm);
+                ran = true;
+            }
+        }
+        if (!ran) {
+            std::cerr << std::format("--control takes gate, skew, both or nothing (all three), not '{}'\n", wanted);
+            return 2;
+        }
     }
     if (journal) {
         std::cout << "\njournal written to " << std::filesystem::absolute(journal->directory()).string() << "\n";
@@ -501,7 +540,8 @@ void usage() {
     std::cerr << "usage: harvester [-v] {replay,fetch,live,doctor,report,config} [options]\n\n"
                  "Order-flow / toxicity aware market making on CME futures: Databento MDP 3.0 book,\n"
                  "Avellaneda-Stoikov quotes, IBKR execution.\n\n"
-                 "  replay  -c CONFIG [--dbn FILE] [--seconds N] [--seed N] [--toxic F] [-o DIR] [--no-journal] [--control]\n"
+                 "  replay  -c CONFIG [--dbn FILE] [--seconds N] [--seed N] [--toxic F] [-o DIR] [--no-journal]\n"
+                 "          [--control [gate|skew|both]]   control arms; bare runs all three\n"
                  "  fetch   -c CONFIG --start ISO --end ISO -o FILE\n"
                  "  live    -c CONFIG [--dry-run] [--max-cycles N]\n"
                  "  doctor  -c CONFIG [--feed-seconds S]\n"

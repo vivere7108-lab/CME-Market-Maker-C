@@ -66,8 +66,10 @@ struct DatabentoConfig {
     // Ask for the book snapshot on subscribe (MBO). The book has to be
     // *complete* before a quote is placed against it.
     bool snapshot = true;
-    // A book that has not moved for this long is stale, whatever it says.
-    double stale_after_seconds = 3.0;
+    // There is no staleness dial here: the book's age is checked once, by
+    // ``risk.stale_book_cancel_seconds``, which pulls the quotes. A second
+    // one read by nothing was worse than none -- it invited tuning and
+    // answered with silence.
 
     void validate() const;
 };
@@ -145,6 +147,13 @@ struct QuotingConfig {
     // toxicity multiplier and ``min_half_spread_ticks`` still apply on
     // top. Empty is off, which is every configuration that ships.
     std::string external_half_file;
+    // And the same hook for the other direction: a CSV of ``ts_ns,ticks``
+    // added to the skew the flow signals already produce, so a rule that
+    // reads something this system does not -- another product's book, say
+    // -- can be replayed through the real quoter before anything here
+    // learns to compute it. Positive lifts the reservation price, which
+    // makes the bid more aggressive and the ask less. Empty is off.
+    std::string external_skew_file;
 
     void validate() const;
 };

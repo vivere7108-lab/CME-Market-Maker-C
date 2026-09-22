@@ -85,6 +85,11 @@ extern const Product ES;
 extern const Product MES;
 extern const Product NQ;
 extern const Product MNQ;
+extern const Product ZN;
+extern const Product ZF;
+extern const Product ZT;
+extern const Product GC;
+extern const Product CL;
 
 void register_product(const Product& product);
 // Case-insensitive lookup by name or alias. Throws ``UnknownProduct``.

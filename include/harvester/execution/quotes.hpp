@@ -23,7 +23,13 @@
 // anything else.  A pending state that outlives ``ack_timeout_seconds``
 // is logged and treated as ``Unknown``: the manager re-sends a cancel and
 // stops quoting that side until the broker's events say what the order
-// is.
+// is.  That cancel is re-sent every ``ack_timeout_seconds`` for as long
+// as the side stays ``Unknown``, because the lost message can be the
+// cancel itself -- one attempt and then a wait for an event that has no
+// reason to arrive is a side dead for the session on one warning.  The
+// retries are counted in ``stuck_cancels``; past ``LOUD_AFTER_CANCELS``
+// on one order they are logged as errors, since by then the gateway is
+// not answering at all.
 #pragma once
 
 #include <array>
@@ -56,6 +62,8 @@ struct WorkingOrder {
     std::optional<int> target_size;
     double sent_at = 0.0;
     double last_quoted_at = 0.0;
+    // Cancels sent while this order has been ``Unknown``.
+    int cancel_attempts = 0;
 
     int remaining() const { return size - filled > 0 ? size - filled : 0; }
     const char* label() const { return side > 0 ? "bid" : "ask"; }
@@ -86,9 +94,16 @@ public:
     const std::optional<Quote>& desired(int side) const { return desired_[index(side)]; }
     const ExecutionConfig& cfg() const { return cfg_; }
 
+    // Retries past this many on one order are logged as errors.
+    static constexpr int LOUD_AFTER_CANCELS = 3;
+
     std::vector<Fill> fills;
     std::int64_t timeouts = 0;
     std::int64_t rejections = 0;
+    // Cancels re-sent to sides the broker has never answered about. Non-zero
+    // means a side spent time unquotable; it belongs in any session report.
+    std::int64_t stuck_cancels = 0;
+    bool suspended(int side) const { return suspended_[index(side)]; }
 
 private:
     static std::size_t index(int side) { return side > 0 ? 0 : 1; }
@@ -103,6 +118,7 @@ private:
     void cancel(int side);
     void cancel_order(WorkingOrder& order);
     void on_timeout(WorkingOrder& order, double now);
+    void retry_cancel(int side);
     void on_ack(WorkingOrder& order);
     void forget(const WorkingOrder& order);
 

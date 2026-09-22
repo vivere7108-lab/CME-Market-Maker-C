@@ -164,7 +164,16 @@ class Rows:
                    or printed past it, which means the level was cleared.
                    This is what ``queue_position: back`` means in the
                    replay config, and it is the honest one.
+
+        Anything else raises.  This used to accept whatever it was given
+        and silently fall through to ``front``: ``table()`` passed its
+        ``queue_aware`` boolean straight in, ``True == "back"`` is False,
+        and half the report was computed on an unfiltered population
+        forty times the size of the traded one while the other half was
+        filtered.  Nothing said so.
         """
+        if queue not in ("front", "back"):
+            raise ValueError("queue must be 'front' or 'back', not %r" % (queue,))
         rows = self.by_behind[behind]
         if queue == "back":
             rows = [r for r in rows if r["through"] or r["v_at"] > r["q_ahead"]]
@@ -174,7 +183,7 @@ class Rows:
 def table(products, behind, horizon_index=5, queue_aware=True):
     out = []
     for p in products:
-        rows = p.rows(behind, queue_aware)
+        rows = p.rows(behind, "back" if queue_aware else "front")
         spec = p.spec
         tv, fee = spec["tick_value"], spec["fee"]
         n = len(rows)
@@ -211,6 +220,11 @@ def table(products, behind, horizon_index=5, queue_aware=True):
         s_adv = [r["adv"] for r in sample]
         s_mk = [r["m%d" % horizon_index] for r in sample]
         s_loss = [1 if m < 0 else 0 for m in s_mk]
+        # +-2/sqrt(n) on the population the IC was computed on. An IC is
+        # unreadable without it: the same -0.011 is a result on 46,211
+        # unfiltered fills and noise on the ~1,000 the strategy gets.
+        rec["ic_floor"] = 2.0 / math.sqrt(len(s_adv)) if s_adv else float("nan")
+        rec["ic_n"] = len(s_adv)
         rec["ic"] = spearman(s_adv, s_mk)
         rec["auc"] = auc(s_adv, s_loss)
         rec["ic_ofi"] = spearman([r["adv_ofi"] for r in sample], s_mk)

@@ -53,7 +53,6 @@ void DatabentoConfig::validate() const {
     if (stype_in != "continuous" && stype_in != "raw_symbol" && stype_in != "parent") {
         fail("databento.stype_in must be continuous, raw_symbol or parent");
     }
-    if (stale_after_seconds <= 0) fail("databento.stale_after_seconds must be > 0");
 }
 
 void BookConfig::validate() const {
@@ -327,7 +326,6 @@ Config Config::from_node(const YAML::Node& root) {
         s.read("stype_in", cfg.databento.stype_in);
         s.read("reconnect", cfg.databento.reconnect);
         s.read("snapshot", cfg.databento.snapshot);
-        s.read("stale_after_seconds", cfg.databento.stale_after_seconds);
         s.finish();
     }
     {
@@ -382,6 +380,7 @@ Config Config::from_node(const YAML::Node& root) {
         s.read("skew_depletion_ticks", cfg.quoting.skew_depletion_ticks);
         s.read("skew_run_ticks", cfg.quoting.skew_run_ticks);
         s.read("external_half_file", cfg.quoting.external_half_file);
+        s.read("external_skew_file", cfg.quoting.external_skew_file);
         s.finish();
     }
     {
@@ -548,7 +547,6 @@ std::string Config::to_yaml_string() const {
     e.kv("stype_in", databento.stype_in);
     e.kv("reconnect", databento.reconnect);
     e.kv("snapshot", databento.snapshot);
-    e.kv("stale_after_seconds", databento.stale_after_seconds);
     e.section("book");
     e.kv("depth", book.depth);
     e.kv("anchor", book.anchor);
@@ -591,6 +589,7 @@ std::string Config::to_yaml_string() const {
     e.kv("skew_depletion_ticks", quoting.skew_depletion_ticks);
     e.kv("skew_run_ticks", quoting.skew_run_ticks);
     e.kv("external_half_file", quoting.external_half_file);
+    e.kv("external_skew_file", quoting.external_skew_file);
     e.section("execution");
     e.kv("max_messages_per_second", execution.max_messages_per_second);
     e.kv("burst", execution.burst);

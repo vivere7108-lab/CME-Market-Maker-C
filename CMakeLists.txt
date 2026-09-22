@@ -53,6 +53,7 @@ add_library(harvester_core STATIC
   src/util/log.cpp
   src/util/format.cpp
   src/util/json.cpp
+  src/util/hours.cpp
   src/instruments.cpp
   src/config.cpp
   src/book/book.cpp
