@@ -26,7 +26,6 @@ databento:
   symbol: MES.v.0             # front contract by volume; rolls itself. The raw
   stype_in: continuous        # contract it resolves to is what IBKR is told to
                               # route to.
-  stale_after_seconds: 3.0
 
 book:
   depth: 10
@@ -73,14 +72,21 @@ quoting:
                               # exponential at all -- it decays at 12.9/point
                               # over the first tick and ~3 over the last two, so
                               # no single kappa describes it. Replaying kappa
-                              # 6.2 over ten ES sessions LOSES $1,324 a session
-                              # (t=-3.26, worse in 8 of 10): A-S assumes a
-                              # fill's information content does not depend on
-                              # distance, and on ES that is the whole game.
-                              # Do not estimate this from the tape. If the
+                              # 6.2 over ten ES sessions with NO ceiling loses
+                              # $1,324 a session (t=-3.26, worse in 8 of 10).
+                              # With the max_sigma 0.25 that ships below the
+                              # same change is -$220 a session (se 364,
+                              # t=-0.61, worse in 4 of 10; kappa 4.0 is -$600,
+                              # t=-1.43). The direction holds on both arms, the
+                              # magnitude does not: ten sessions cannot resolve
+                              # $220. So the reason not to fit it is the
+                              # mechanism -- A-S assumes a fill's information
+                              # content does not depend on distance, and on ES
+                              # that is the whole game -- and not a settled
+                              # number for the configuration that ships. If the
                               # quote should sit somewhere else, move it with
                               # quoting.external_half_file, which says what it
-                              # means in ticks.
+                              # means in ticks, and measure it there.
   horizon_seconds: 60.0       # how long a position is expected to be held
   vol_halflife_seconds: 30.0
   vol_sample_ms: 250.0
@@ -126,17 +132,37 @@ risk:
                               # The halt at risk.py can no longer fire, so those
                               # two numbers are now the only inventory limit.
   stale_book_cancel_seconds: 2.0
-  max_sigma: 0.25             # points per root-second. The primary gate: no quote
+                              # the only staleness gate there is: a book that
+                              # has not moved for this long pulls the quotes.
+  max_sigma: 0.22             # points per root-second. The primary gate: no quote
                               # is placed while the anchor is moving faster than
                               # this. Measured on ten ES sessions, fills taken
-                              # above it are the ones that mark out worst, and a
-                              # ceiling anywhere in 0.22-0.30 beat quoting
-                              # through them by ~$670 a session (t=2.43, better
-                              # in 8 of 10). The band is what the evidence
-                              # supports; the exact number is not identifiable
-                              # from ten sessions, so treat it as a starting
-                              # point for the walk and not as a calibration.
+                              # above it are the ones that mark out worst, and
+                              # every ceiling in 0.22-0.30 beat quoting through
+                              # them: 0.22 by +$946 a session (t=2.38, better in
+                              # 8 of 10), 0.25 by +$663 (t=2.33, 9 of 10).
+                              # THE BAND IS WHAT THE EVIDENCE SUPPORTS, NOT THIS
+                              # NUMBER: 0.22 against 0.25 is +$282 a session at
+                              # t=1.00, 6 of 10 -- ten sessions cannot tell them
+                              # apart, and the replay's own se is ~$280. 0.22 is
+                              # chosen as the low end of the supported band, not
+                              # as a calibration; do not re-tune it on the walk's
+                              # first few sessions, which is exactly how the
+                              # in-sample peak at 0.22 was manufactured.
                               # 0 turns it off and restores the old behaviour.
+  sigma_halflife_seconds: 12.5
+                              # the ceiling reads its own volatility estimate at
+                              # this half-life instead of the quoter's 30s, so a
+                              # faster sigma can catch a regime change without
+                              # making the A-S spread jitter. Worth +$188 a
+                              # session at the 0.25 ceiling (se 115, t=1.63, 7 of
+                              # 10) and +$81 at 0.22 (se 49, t=1.66, 7 of 10);
+                              # three measurement paths -- the external_file
+                              # hook, the native arm, and the re-run on the
+                              # corrected quoting hours -- agree on the 10-20s
+                              # band, and 12.5 is its middle. Again a band, not a
+                              # point. 0 follows quoting.vol_halflife_seconds,
+                              # which is the old behaviour.
   kill_file: runs/HALT        # `touch runs/HALT` pulls every quote
 
 ibkr:
