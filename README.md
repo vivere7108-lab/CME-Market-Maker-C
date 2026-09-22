@@ -78,7 +78,8 @@ build/harvester replay -c configs/es_replay.yaml --dbn data_cache/es.dbn.zst --c
 build/harvester doctor -c configs/es_paper.yaml
 
 # The forward walk. --dry-run reads the real book and simulates the fills;
-# it needs a Databento key and nothing else.
+# it needs a Databento key and nothing else -- or set ibkr.market_data and
+# it reads the book from IBKR's CME depth instead, with its caveats below.
 build/harvester live -c configs/es_paper.yaml --dry-run
 
 # Read back what a session did.
@@ -141,6 +142,7 @@ The Python package's modules, one for one:
 | `execution/quotes.py` | `execution/quotes.hpp` | the quote manager: states, dead-band, ack timeout |
 | `execution/simulated.py` | `execution/simulated.hpp` | the simulated exchange and its queue model |
 | `execution/ibkr.py` | `execution/ibkr.hpp`, `tws_gateway.hpp` | the connection and broker over a gateway seam; the TWS API behind it |
+| — | `execution/market_data.hpp`, `ibkr_feed.hpp` | IBKR's depth as a book feed, over the same kind of seam; new here |
 | `inventory.py`, `risk.py` | `inventory.hpp`, `risk.hpp` | position, P&L, markouts; pulls and halts |
 | `live/journal.py`, `pipeline.py`, `runner.py` | `live/journal.hpp`, `pipeline.hpp`, `runner.hpp` | JSONL journal, the decision cycle, the forward walk |
 | `replay/synthetic.py`, `runner.py` | `replay/synthetic.hpp`, `pyrandom.hpp`, `runner.hpp` | the generated market with CPython's random numbers; the replay |
@@ -221,6 +223,48 @@ to *that* contract; a roll makes the runner reconnect and re-qualify.
 ```
 microprice = (bid · ask_size + ask · bid_size) / (bid_size + ask_size)
 ```
+
+## The IBKR book, when Databento is not available
+
+`ibkr.market_data: true` builds the same book from IBKR's own depth — the
+CME Real-Time (P,L2) add-on — instead of Databento. It exists so a forward
+walk can keep running when the Databento session cannot be had. The feed
+maintains IBKR's ladder, synthesises the MBP-10 records the builders
+already read, and pushes them through the same `RecordFeed`, so the book,
+the signals, the gate, the quoter and the journal are unchanged and
+unaware. It takes its own TWS session on its own client id
+(`market_data_client_id`, default `client_id + 1`), so a broker reconnect
+does not take the book down, and it resolves the contract by the same
+route the router does, so the month quoted is the month traded.
+
+**It is a fallback, not a second source of the same thing.** Four
+differences, none of them fixable in the adapter:
+
+| | Databento MDP 3.0 | IBKR |
+|---|---|---|
+| aggressor side | stated in CME's match event | **inferred** with the quote rule, against the touch before the trade |
+| book updates | every exchange message | a maintained ladder: rows change, the messages between them do not arrive |
+| timestamps | CME's, nanoseconds | none on depth, whole seconds on trades — records are stamped on arrival here |
+| order counts | per level | absent (`bid_ct`/`ask_ct` are zero) |
+
+The first two are the ones that move numbers. VPIN is built on the
+aggressor classification, so its levels are an estimate on this feed in a
+way they are not on MDP 3.0; `harvester doctor` reports the share of
+trades the quote rule could not call, and `toxicity.unknown_side` decides
+what happens to those. Order flow imbalance and queue depletion are built
+from book *deltas*, so on a sampled ladder they see a coarser series than
+the one they were measured on — expect them smaller and slower, not merely
+noisier.
+
+So: **no number measured on this feed is comparable with a replayed one,
+or with a Databento-fed one.** Paired arms run on it are still valid
+against each other, because both arms see the same book. Anything
+absolute is not.
+
+The ladder itself — insert, update, delete, the shifts they imply, the
+quote rule and its fallback — is ordinary code behind the `IbMarketData`
+seam and is unit-tested without the SDK. Only the socket under it needs
+`HARVESTER_WITH_IBKR`.
 
 ## Two speeds of signal
 
@@ -431,7 +475,7 @@ journal answers and a P&L line cannot.
 ## Correctness
 
 ```bash
-build/harvester_tests        # 163 cases, 3,742 assertions
+build/harvester_tests        # 179 cases, 3,805 assertions
 tools/parity.sh              # the Python and C++ replays, diffed
 ```
 
@@ -469,10 +513,17 @@ quoting-hours check.
 - **VPIN's percentile** drifts under a persistent regime: a storm that
   lasts all day becomes the distribution.
 - **The synthetic market** is not a model of ES.
+- **The IBKR book feed has never seen a live IBKR session.** The ladder,
+  the quote rule and the reset handling are tested through the
+  `IbMarketData` seam; the TWS session under them compiles against API
+  10.45 and uses only callbacks that have been stable since 974, but no
+  depth message has arrived through it. `doctor` with `ibkr.market_data`
+  on is the first thing to run, during the session.
 - **Not yet run against a live Databento session or a live gateway.** The
   Databento adapter compiles against databento-cpp 0.42 and the DBN reader
   is exercised on that library's own MBO and MBP-10 test tapes; the TWS
-  adapter compiles against API 10.30 and 10.37 and the logic above its
-  seam is tested through a fake, but no order has been sent through it.
+  adapter compiles against API 10.30, 10.37 and 10.45 and the logic above
+  its seam is tested through a fake, but no order has been sent through
+  it.
   `doctor` is the first thing to run, during the session, and `--dry-run`
   the second.

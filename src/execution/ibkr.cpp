@@ -68,48 +68,53 @@ void IbkrConnection::disconnect() {
 
 bool IbkrConnection::is_connected() const { return gateway_->is_connected(); }
 
-const IbContract& IbkrConnection::qualify(const std::optional<std::string>& local_symbol) {
-    const Product& p = product_;
-    const std::optional<std::string> symbol = cfg_.ibkr.local_symbol ? cfg_.ibkr.local_symbol : local_symbol;
-    if (symbol && !symbol->empty()) {
+IbContract qualify_front_contract(const Product& p, const std::optional<std::string>& local_symbol,
+                                  const QualifyFn& qualify) {
+    if (local_symbol && !local_symbol->empty()) {
         IbContract query;
         query.symbol = p.ibkr_symbol;
         query.sec_type = "FUT";
-        query.local_symbol = *symbol;
+        query.local_symbol = *local_symbol;
         query.exchange = p.exchange;
         query.currency = p.currency;
-        const std::vector<IbContract> qualified = gateway_->qualify(query);
+        const std::vector<IbContract> qualified = qualify(query);
         if (qualified.empty()) {
             throw ExecutionError(std::format(
                 "IBKR could not qualify {} {} on {}. The feed's raw symbol and IBKR's local symbol may differ for "
                 "this product; set ibkr.local_symbol explicitly.",
-                p.ibkr_symbol, *symbol, p.exchange));
+                p.ibkr_symbol, *local_symbol, p.exchange));
         }
-        contract_ = qualified[0];
-    } else {
-        IbContract cont;
-        cont.symbol = p.ibkr_symbol;
-        cont.sec_type = "CONTFUT";
-        cont.exchange = p.exchange;
-        cont.currency = p.currency;
-        const std::vector<IbContract> resolved = gateway_->qualify(cont);
-        if (resolved.empty()) {
-            throw ExecutionError(std::format("IBKR could not resolve the continuous {} contract on {}", p.ibkr_symbol,
-                                             p.exchange));
-        }
-        IbContract front;
-        front.symbol = p.ibkr_symbol;
-        front.sec_type = "FUT";
-        front.last_trade_date = resolved[0].last_trade_date;
-        front.exchange = p.exchange;
-        front.currency = p.currency;
-        const std::vector<IbContract> qualified = gateway_->qualify(front);
-        if (qualified.empty()) {
-            throw ExecutionError(std::format("IBKR could not qualify the front {} contract ({})", p.ibkr_symbol,
-                                             resolved[0].last_trade_date));
-        }
-        contract_ = qualified[0];
+        return qualified[0];
     }
+    IbContract cont;
+    cont.symbol = p.ibkr_symbol;
+    cont.sec_type = "CONTFUT";
+    cont.exchange = p.exchange;
+    cont.currency = p.currency;
+    const std::vector<IbContract> resolved = qualify(cont);
+    if (resolved.empty()) {
+        throw ExecutionError(std::format("IBKR could not resolve the continuous {} contract on {}", p.ibkr_symbol,
+                                         p.exchange));
+    }
+    IbContract front;
+    front.symbol = p.ibkr_symbol;
+    front.sec_type = "FUT";
+    front.last_trade_date = resolved[0].last_trade_date;
+    front.exchange = p.exchange;
+    front.currency = p.currency;
+    const std::vector<IbContract> qualified = qualify(front);
+    if (qualified.empty()) {
+        throw ExecutionError(std::format("IBKR could not qualify the front {} contract ({})", p.ibkr_symbol,
+                                         resolved[0].last_trade_date));
+    }
+    return qualified[0];
+}
+
+const IbContract& IbkrConnection::qualify(const std::optional<std::string>& local_symbol) {
+    const Product& p = product_;
+    contract_ = qualify_front_contract(
+        p, cfg_.ibkr.local_symbol ? cfg_.ibkr.local_symbol : local_symbol,
+        [this](const IbContract& query) { return gateway_->qualify(query); });
     HLOG_INFO(kLog, "quoting {} (conId {})", contract_->local_symbol.empty() ? "?" : contract_->local_symbol,
               contract_->con_id);
     return *contract_;

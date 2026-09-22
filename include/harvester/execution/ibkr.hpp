@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -100,6 +101,16 @@ struct IbExecution {
     std::string side;  // BOT / SLD
     double time = 0.0;  // seconds since the epoch, 0 when unknown
 };
+
+// Resolve the contract to quote: the one ``local_symbol`` names, or the
+// front month by volume when it is empty. ``qualify`` is the session's own
+// contract lookup -- the router and the market-data feed each pass their
+// own, so both land on the same contract by the same route, which is what
+// lets the runner compare the feed's symbol against the one it routes to.
+// Throws ``ExecutionError`` when nothing matches.
+using QualifyFn = std::function<std::vector<IbContract>(const IbContract&)>;
+IbContract qualify_front_contract(const Product& product, const std::optional<std::string>& local_symbol,
+                                  const QualifyFn& qualify);
 
 // What the gateway reports back, on its own thread.
 class IbEventListener {

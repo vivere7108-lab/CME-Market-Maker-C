@@ -168,6 +168,12 @@ void RiskConfig::validate() const {
 
 void IBKRConfig::validate() const {
     if (connect_timeout <= 0) fail("ibkr.connect_timeout must be > 0");
+    if (market_data_rows < 0) fail("ibkr.market_data_rows must be >= 0 (0 follows book.depth)");
+    if (market_data_client_id < 0) fail("ibkr.market_data_client_id must be >= 0 (0 is ibkr.client_id + 1)");
+    if (market_data && market_data_client_id == client_id) {
+        fail("ibkr.market_data_client_id must differ from ibkr.client_id: the feed and the router each need their own "
+             "TWS session, or a reconnect on one drops the other");
+    }
 }
 
 void LiveConfig::validate() const {
@@ -422,6 +428,9 @@ Config Config::from_node(const YAML::Node& root) {
         s.read("connect_timeout", cfg.ibkr.connect_timeout);
         s.read("local_symbol", cfg.ibkr.local_symbol);
         s.read("outside_rth", cfg.ibkr.outside_rth);
+        s.read("market_data", cfg.ibkr.market_data);
+        s.read("market_data_client_id", cfg.ibkr.market_data_client_id);
+        s.read("market_data_rows", cfg.ibkr.market_data_rows);
         s.finish();
     }
     {
@@ -622,6 +631,9 @@ std::string Config::to_yaml_string() const {
     e.kv("connect_timeout", ibkr.connect_timeout);
     e.kv("local_symbol", ibkr.local_symbol);
     e.kv("outside_rth", ibkr.outside_rth);
+    e.kv("market_data", ibkr.market_data);
+    e.kv("market_data_client_id", ibkr.market_data_client_id);
+    e.kv("market_data_rows", ibkr.market_data_rows);
     e.section("live");
     e.kv("journal", live.journal);
     e.kv("journal_dir", live.journal_dir);
