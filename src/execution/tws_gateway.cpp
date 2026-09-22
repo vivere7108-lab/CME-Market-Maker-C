@@ -65,6 +65,15 @@ double from_decimal(Decimal value) {
     return DecimalFunctions::decimalToDouble(value);
 }
 
+// The order-id type, which changed spelling on the same API version as
+// the depth callbacks' request id: ``OrderId`` (long) up to 10.37, plain
+// ``int`` from 10.45. See TwsApi.cmake.
+#if HARVESTER_TWS_TICKER_ID
+using OrderReqId = OrderId;
+#else
+using OrderReqId = int;
+#endif
+
 }  // namespace
 
 struct TwsGateway::Impl : public DefaultEWrapper {
@@ -191,7 +200,7 @@ struct TwsGateway::Impl : public DefaultEWrapper {
 
     // -- EWrapper -----------------------------------------------------------------
 
-    void nextValidId(OrderId order_id) override {
+    void nextValidId(OrderReqId order_id) override {
         {
             std::lock_guard<std::mutex> guard(state_mutex);
             next_order_id_value = std::max<long>(next_order_id_value, order_id);
@@ -263,7 +272,7 @@ struct TwsGateway::Impl : public DefaultEWrapper {
 #else
     using PermId = int;
 #endif
-    void orderStatus(OrderId order_id, const std::string& status, Decimal filled, Decimal remaining, double,
+    void orderStatus(OrderReqId order_id, const std::string& status, Decimal filled, Decimal remaining, double,
                      PermId, int, double, int, const std::string&, double) override {
         {
             std::lock_guard<std::mutex> guard(state_mutex);
@@ -274,7 +283,7 @@ struct TwsGateway::Impl : public DefaultEWrapper {
         if (IbEventListener* l = listener.load()) l->on_order_status(order_id, status, from_decimal(filled), from_decimal(remaining));
     }
 
-    void openOrder(OrderId order_id, const Contract& contract, const Order& order, const OrderState& state) override {
+    void openOrder(OrderReqId order_id, const Contract& contract, const Order& order, const OrderState& state) override {
         IbOpenOrder row;
         row.contract = from_tws(contract);
         row.order.order_id = order_id;
