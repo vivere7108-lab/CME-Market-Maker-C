@@ -524,6 +524,12 @@ quoting-hours check.
   is exercised on that library's own MBO and MBP-10 test tapes; the TWS
   adapter compiles against API 10.30, 10.37 and 10.45 and the logic above
   its seam is tested through a fake, but no order has been sent through
-  it.
+  it. The three API lines differ in the `error` signature, the `permId`
+  width, the commission report's name and the request-id types; each is
+  detected in `cmake/TwsApi.cmake` rather than assumed, because a
+  request-id type that is wrong for the SDK in use makes a callback
+  silently not an override. Only one SDK can be compiled at a time, so
+  **build once against the line you actually run** before trusting a
+  version claim here.
   `doctor` is the first thing to run, during the session, and `--dry-run`
   the second.

@@ -40,6 +40,15 @@ file(READ "${TWS_API_DIR}/EWrapper_prototypes.h" _tws_prototypes)
 if(_tws_prototypes MATCHES "time_t errorTime")
   target_compile_definitions(twsapi PUBLIC HARVESTER_TWS_ERROR_HAS_TIME=1)
 endif()
+# The request-id types went away between 10.37 and 10.45: the depth
+# callbacks took ``TickerId`` (a typedef for long) and now take ``int``, so
+# a signature written for one line is silently not an override on the
+# other -- it compiles as a new member function and the callback is never
+# called, or the class stays abstract. 10.45 has no ``TickerId`` anywhere
+# in its headers, which is what this tests.
+if(_tws_prototypes MATCHES "TickerId")
+  target_compile_definitions(twsapi PUBLIC HARVESTER_TWS_TICKER_ID=1)
+endif()
 if(_tws_prototypes MATCHES "long long permId")
   target_compile_definitions(twsapi PUBLIC HARVESTER_TWS_PERMID_LONGLONG=1)
 endif()

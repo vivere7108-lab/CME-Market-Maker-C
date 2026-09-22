@@ -82,6 +82,17 @@ bool is_fatal(int code) {
     }
 }
 
+// The depth callbacks' request-id type, which changed spelling between
+// API lines: ``TickerId`` (long) up to 10.37, plain ``int`` from 10.45.
+// Getting it wrong does not fail loudly -- the method is simply not an
+// override -- so it is detected in TwsApi.cmake rather than assumed. The
+// tick-by-tick callbacks took ``int`` on both lines and are left alone.
+#if HARVESTER_TWS_TICKER_ID
+using DepthReqId = TickerId;
+#else
+using DepthReqId = int;
+#endif
+
 }  // namespace
 
 class TwsMarketData final : public IbMarketData, public DefaultEWrapper {
@@ -211,12 +222,12 @@ private:
         cv_.notify_all();
     }
 
-    void updateMktDepth(int, int position, int operation, int side, double price, Decimal size) override {
+    void updateMktDepth(DepthReqId, int position, int operation, int side, double price, Decimal size) override {
         if (auto* l = listener()) l->on_depth(position, operation, side, price, from_decimal(size));
     }
 
-    void updateMktDepthL2(int, int position, const std::string&, int operation, int side, double price, Decimal size,
-                          bool) override {
+    void updateMktDepthL2(DepthReqId, int position, const std::string&, int operation, int side, double price,
+                          Decimal size, bool) override {
         if (auto* l = listener()) l->on_depth(position, operation, side, price, from_decimal(size));
     }
 
