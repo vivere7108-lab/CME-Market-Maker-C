@@ -7,6 +7,7 @@
 #include "harvester/databento/api.hpp"
 #include "harvester/execution/simulated.hpp"
 #include "harvester/util/clock.hpp"
+#include "harvester/util/hours.hpp"
 #include "harvester/util/log.hpp"
 
 namespace harvester {
@@ -26,14 +27,6 @@ std::string join(const std::vector<std::string>& parts) {
     return out;
 }
 
-const std::chrono::time_zone* find_zone(const std::string& name) {
-    try {
-        return std::chrono::locate_zone(name);
-    } catch (const std::exception& exc) {
-        HLOG_WARNING(kLog, "time zone {} is not available ({}); quoting hours are checked in UTC", name, exc.what());
-        return nullptr;
-    }
-}
 }  // namespace
 
 bool stop_signalled() { return g_stop.load(); }
@@ -57,19 +50,7 @@ void LiveRunner::request_stop() {
 }
 
 bool LiveRunner::in_hours(double now) const {
-    using namespace std::chrono;
-    const sys_time<microseconds> at{microseconds{static_cast<std::int64_t>(now * 1e6)}};
-    local_time<microseconds> local;
-    if (tz_ != nullptr) {
-        local = tz_->to_local(at);
-    } else {
-        local = local_time<microseconds>{at.time_since_epoch()};
-    }
-    const auto day = floor<days>(local);
-    const weekday wd{sys_days{day.time_since_epoch()}};
-    if (wd.iso_encoding() >= 6) return false;  // Saturday, Sunday
-    const auto since_midnight = duration_cast<seconds>(local - day).count();
-    return cfg_.live.quote_start.seconds() <= since_midnight && since_midnight < cfg_.live.quote_end.seconds();
+    return within_quoting_hours(now, tz_, cfg_.live.quote_start, cfg_.live.quote_end);
 }
 
 Pipeline& LiveRunner::run(std::optional<std::int64_t> max_cycles) {

@@ -146,6 +146,35 @@ TEST_CASE("extreme reduce-only keeps the flattening side") {
     CHECK_FALSE(flat.quoting());
 }
 
+TEST_CASE("the extreme flattening side survives the distance cap") {
+    // The shipped numbers: max_behind_ticks 8, and a 4.0 spread multiplier
+    // on a half-spread already ~2.7 ticks wide, which puts the quote 10-12
+    // ticks back. Before the exemption the cap dropped it and reduce_only
+    // was unreachable -- 0 quotes in 881 extreme snapshots on the ES tapes.
+    EngineFixture e;
+    REQUIRE(e.quoting.max_behind_ticks == 8);
+    const BookSnapshot s = snapshot(5000.0, 10, 5000.25, 10);
+    const auto tox_extreme = tox(ToxicityLevel::Extreme, 4.0, 0.0);
+
+    const auto lng = e.decide(s, 0.1, FLAT, tox_extreme, 1);
+    REQUIRE(lng.ask.has_value());
+    CHECK_FALSE(lng.bid.has_value());
+    CHECK(es().ticks(lng.ask->price - 5000.25) > e.quoting.max_behind_ticks);
+    bool kept = false;
+    for (const auto& r : lng.reasons) kept = kept || r.find("kept to flatten") != std::string::npos;
+    CHECK(kept);
+
+    const auto shrt = e.decide(s, 0.1, FLAT, tox_extreme, -1);
+    REQUIRE(shrt.bid.has_value());
+    CHECK_FALSE(shrt.ask.has_value());
+
+    // Flat at extreme is still a full pull, and the cap still binds on
+    // every side that is not flattening out of one.
+    CHECK_FALSE(e.decide(s, 0.1, FLAT, tox_extreme, 0).quoting());
+    EngineFixture wide("reduce_only", [](QuotingConfig& q) { q.gamma = 0.5; q.kappa = 0.1; q.max_behind_ticks = 2; });
+    CHECK_FALSE(wide.decide(s, 1.0, FLAT, tox(), 0).quoting());
+}
+
 TEST_CASE("buying pressure shifts both quotes up") {
     EngineFixture e("reduce_only", [](QuotingConfig& q) { q.skew_ofi_ticks = 2.0; q.max_behind_ticks = 100; q.gamma = 0.5; q.kappa = 0.1; });
     const auto neutral = e.decide(snapshot(5000.0, 10, 5000.25, 10), 1.0, FLAT, tox(), 0);
@@ -219,6 +248,25 @@ TEST_CASE("an offline depth policy stands in for the model spread") {
     CHECK(a.half_spread.value() > b.half_spread.value());
     CHECK(a.bid->price < b.bid->price);
     CHECK(a.ask->price > b.ask->price);
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("an offline skew adds to the one the flow signals produce") {
+    const std::string path = "external_skew_test.csv";
+    {
+        std::ofstream out(path);
+        out << "ts,skew_ticks\n0,2\n";
+    }
+    EngineFixture skewed("reduce_only", [&](QuotingConfig& c) { c.external_skew_file = path; });
+    EngineFixture plain;
+    const BookSnapshot s = snapshot(5000.0, 20, 5000.25, 20);
+    const QuoteDecision a = skewed.decide(s, 0.2, FLAT, tox(), 0);
+    const QuoteDecision b = plain.decide(s, 0.2, FLAT, tox(), 0);
+    // Two ticks of offline skew move the reservation price up by two ticks
+    // and both quotes with it; the half-spread is untouched.
+    CHECK(a.skew_ticks == doctest::Approx(b.skew_ticks + 2.0));
+    CHECK(a.reservation.value() == doctest::Approx(b.reservation.value() + 2 * es().tick_size));
+    CHECK(a.half_spread.value() == doctest::Approx(b.half_spread.value()));
     std::filesystem::remove(path);
 }
 

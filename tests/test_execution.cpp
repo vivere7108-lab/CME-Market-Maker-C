@@ -264,6 +264,38 @@ TEST_CASE("an ack timeout cancels and suspends the side") {
     CHECK(f.broker.count("place") == 2);
 }
 
+TEST_CASE("an unacknowledged side keeps re-sending the cancel") {
+    ManagerFixture f;
+    f.broker.ack = false;
+    f.qm.set_desired(decision({{4999.75, 1}}, std::nullopt));
+    f.cycle();
+    f.clock.set(3.0);
+    f.cycle();
+    REQUIRE(f.qm.working(1)->state == OrderState::Unknown);
+    CHECK(f.qm.stuck_cancels == 0);
+    const std::size_t after_timeout = f.broker.count("cancel");
+
+    // The cancel the timeout sent can be the message that was lost. Before
+    // the retry this side was dead for the session: nothing was ever sent
+    // to it again and only a broker event could revive it.
+    for (int i = 1; i <= 3; ++i) {
+        f.clock.set(3.0 + 3.0 * i);
+        f.cycle();
+    }
+    CHECK(f.qm.stuck_cancels == 3);
+    CHECK(f.broker.count("cancel") == after_timeout + 3);
+    CHECK(f.qm.suspended(1));
+    CHECK(f.broker.count("place") == 1);  // and still no new quote on it
+
+    // One acknowledgement and the side comes back.
+    f.broker.events.push_back(OrderEvent::cancelled(1));
+    f.cycle();
+    f.clock.set(20.0);
+    f.cycle();
+    CHECK_FALSE(f.qm.suspended(1));
+    CHECK(f.broker.count("place") == 2);
+}
+
 TEST_CASE("stays inside the budget under a storm") {
     ManagerFixture f(0.0, 0.0, 0.34, 5.0, 10.0, 5);
     for (int i = 0; i < 2000; ++i) {

@@ -268,7 +268,11 @@ spread multiplier and floored at `min_half_spread_ticks`; the reservation
 is shifted by the flow skews; the bid is capped at `behind_best_ticks`
 below the best bid and the ask floored at the same above the best ask,
 both snapped outwards to the tick, and a side more than `max_behind_ticks`
-away is not quoted; the size is `base_size` times the level's size
+away is not quoted — except the side flattening out of an `extreme`
+regime, which is exempt, because that level's own 4.0 spread multiplier
+puts it 10–12 ticks back against a cap of 8 and dropping it turned
+`reduce_only` into a full pull (0 quotes in 881 extreme snapshots on the
+ES tapes); the size is `base_size` times the level's size
 multiplier (ceiling), capped so no fill can take the position past
 `risk.max_position`, and past `reduce_only_position` only the flattening
 side is quoted. Every dropped side carries a reason into the journal.
@@ -287,8 +291,11 @@ all. One order a side, modified in place: a replace is one message. While
 a side has a message in flight nothing else is sent to it; a pending state
 that outlives `ack_timeout_seconds` is treated as unknown, a cancel is
 re-sent, and the side is not quoted until the broker says what the order
-is. Every order is a `DAY` limit with `outsideRth` set, routed direct to
-CME.
+is. That cancel is then re-sent every `ack_timeout_seconds` for as long as
+the side stays unknown — the lost message can be the cancel itself, and a
+single attempt would leave the side dead for the session on one warning.
+The retries are counted and logged, as errors past the third. Every order
+is a `DAY` limit with `outsideRth` set, routed direct to CME.
 
 ## Risk: caps well below margin
 
@@ -308,30 +315,67 @@ move that swept it. Two kinds of stop, kept apart:
 
 `risk.max_sigma` is the volatility ceiling, in the same points per
 root-second the Avellaneda-Stoikov spread is sized in: above it no quote
-is placed at all. It is the primary gate in `es_paper.yaml`, at 0.25, and
-it is off (`0`) everywhere else.
+is placed at all. It is the primary gate in `es_paper.yaml`, at 0.22, and
+it is off (`0`) everywhere else. `risk.sigma_halflife_seconds` gives that
+ceiling its own volatility estimate — 12.5 seconds in `es_paper.yaml`
+against the quoter's 30 — so a faster sigma can catch a regime change
+without making the A-S spread jitter; `0` follows the quoter's and is the
+behaviour everywhere else.
+
+Both numbers are the middle or the edge of a measured band, not a
+calibration. 0.22 against 0.25 is +$282 a session at t = 1.00 over ten
+sessions, and the 10–20 second half-life band is +$188 a session at
+t = 1.63: the bands are supported and the points inside them are not
+separable at this sample size. Re-tuning either on the walk's first
+sessions would be fitting the noise that put the in-sample peak at 0.22
+in the first place.
 
 The reason it is a pull and not a wider spread is what the tape says about
-which fills go wrong. Marking out every sweep that reached a quote one
-tick behind the touch over ten ES sessions, the pre-sweep signals — OFI,
-queue depletion, the aggressor run, VPIN's percentile — separate the
-profitable fills from the unprofitable ones no better than chance: an
-information coefficient of −0.011 against a detection floor of ±0.009, and
-markouts by gate level of +8.90, +7.45, +9.42 and +11.28 dollars from calm
-to extreme, which is not an ordering. Realised volatility does separate
-them, and a logistic regression free to use all of it puts four times the
-weight on vol that it puts on OFI and a coefficient of +0.003 on VPIN.
-Replayed over the same ten sessions, a ceiling in the 0.22–0.30 band is
-worth about $670 a session against quoting through those periods
-(t = 2.43, better in eight of ten), and every one of eleven ceilings tried
-between 0.70 and 0.12 beat quoting without one.
+which fills go wrong. Realised volatility separates the profitable fills
+from the unprofitable ones, and a logistic regression free to use
+everything puts four times the weight on vol that it puts on OFI and a
+coefficient of +0.003 on VPIN. Replayed over ten ES sessions, a ceiling in
+the 0.22–0.30 band is worth about $670 a session against quoting through
+those periods (+$663, t = 2.33, better in nine of ten at 0.25 alone), and
+every one of eleven ceilings tried between 0.70 and 0.12 beat quoting
+without one. Where in the band is not identifiable: 0.22 against 0.25 is
++$282 a session at t = 1.00, six of ten.
+
+Two claims this README used to make about the signals were read off the
+wrong population, and both are withdrawn. A bug in `edge_report.py`
+computed them over every sweep that reached the price rather than over the
+fills a quote at the back of the queue actually gets — at one tick behind
+on ten ES sessions that is 46,211 rows against 1,022, and the detection
+floor moves with it from ±0.009 to ±0.063.
+
+- **"The signals separate the fills no better than chance"** (quoted as an
+  IC of −0.011 against ±0.009). On the traded population the composite is
+  +0.053 at one second, +0.146 at five and +0.103 at sixty — *positive*,
+  meaning flow pointing our way before a fill predicts a **better**
+  markout: continuation, not toxicity. Three fresh sessions
+  (2026-09-15/16/17, n = 628) hold up the five-second version and break
+  the sixty-second one, which flips to −0.050. Pooled over all thirteen
+  sessions (n = 1,650, floor ±0.049) the five-second IC is +0.112 and the
+  sixty-second is +0.036, inside the floor. So: a five-second continuation
+  effect that survives a hold-out, worth $19.02 a fill between the best
+  and worst quintile against a $4.60 round turn — and no way to collect it
+  yet, because the replay's own standard error is $492 a session.
+- **"The gate's levels do not order the markouts"** (quoted as +8.90,
+  +7.45, +9.42, +11.28 from calm to extreme). Queue-aware over the same
+  ten sessions they are +5.21, +12.98, +38.93 and +22.54, and pooled over
+  thirteen, toxic-and-extreme minus calm is +$12.73 a fill (se 10.96,
+  t = 1.16). That is not an ordering either, at this power — but the
+  direction is the *opposite* of the gate's premise: it widens the spread
+  and cuts size into the levels whose fills pay best. Consistent with the
+  replay, where turning the gate off behind a 0.25 ceiling costs +$119 a
+  session at t = 0.52.
 
 The VPIN gate stays on behind it. On its own it is worth $507 a session —
 not by picking fills, which it cannot do, but by widening the spread and
 cutting size when the tape is busy, which reduces exposure in exactly the
 conditions the ceiling now refuses outright. The two are substitutes: with
-the ceiling in place, turning the gate off costs $131 a session at
-t = −0.55, indistinguishable from zero. It is kept as the backstop for a
+the ceiling in place, turning the gate off is worth $119 a session at
+t = 0.52, indistinguishable from zero. It is kept as the backstop for a
 ceiling that is misconfigured or a volatility estimate that has not warmed
 up, and its spread multipliers are not where the money is.
 
@@ -349,25 +393,33 @@ to run at all alongside a position in anything else.
 ## Replay, and reading a result
 
 `harvester replay` runs the same `Pipeline::step` the live runner does, on
-the tape's own clock, with a simulated exchange that joins the back of the
-queue, consumes it with trades at the price, fills on a seller-initiated
-trade at or through a bid, and fills when the book crosses a resting
-price. It has no latency and no impact, so replay fills are a floor on
-adverse selection. The generated market (`replay.source: synthetic`) is a
-harness with informed episodes at `synthetic_toxic_fraction`; `--control`
-runs the same tape with the gate off and the skews at zero:
+the tape's own clock — including the quoting hours, read off that clock in
+the product's zone exactly as the live runner reads them, so a tape that
+starts at 08:30 is not quoted until `quote_start` — with a simulated
+exchange that joins the back of the queue, consumes it with trades at the
+price, fills on a seller-initiated trade at or through a bid, and fills
+when the book crosses a resting price. It has no latency and no impact,
+so replay fills are a floor on adverse selection. The generated market
+(`replay.source: synthetic`) is a harness with informed episodes at
+`synthetic_toxic_fraction`. `--control`
+runs the same tape again with the order-flow awareness removed — one arm
+at a time, because the gate and the skews do different jobs and adding
+their effects together hides both:
 
 ```
-fills: 94 (94 contracts); final position +0        fills: 144 (144 contracts); final position +0
-P&L: realised $-912  unrealised $0  fees $216       P&L: realised $-1,625  unrealised $0  fees $331
-  net $-1,129                                         net $-1,956
-toxicity: 108 transitions; time in calm 67%,        toxicity: 0 transitions; time in calm 100%
-  elevated 18%, toxic 10%, extreme 4%
-signals: net $+828 against the control (94 vs 144 fills)
+                            fills   net      against the shipped run
+shipped                        94   $-1,129
+--control gate                112   $-2,058  gate:    net $+929
+--control skew                102   $-1,535  skews:   net $+406
+--control both                144   $-1,956  signals: net $+828
 ```
 
-Those are seed 7 of `configs/es_replay.yaml`, and they are the Python
-system's numbers to the dollar. For every fill the journal records the
+`--control` with no argument runs all three; naming one runs only that
+one. The arms do not add up, which is the reason to run them apart: the
+gate widens the spread and cuts size when the tape is busy, the skews move
+the quote sideways and are most of what unsticks it, and turning both off
+is not the sum of turning off each. Those are seed 7 of
+`configs/es_replay.yaml`. For every fill the journal records the
 anchor at the fill and again at one, five and thirty seconds after it
 (`markout_h = side · (anchor(t + h) − fill_price) · multiplier`, dollars
 per contract, positive when the price went the quote's way), bucketed by
@@ -379,9 +431,16 @@ journal answers and a P&L line cannot.
 ## Correctness
 
 ```bash
-build/harvester_tests        # 148 cases, 2,668 assertions
+build/harvester_tests        # 163 cases, 3,742 assertions
 tools/parity.sh              # the Python and C++ replays, diffed
 ```
+
+`parity.sh` allows exactly one difference, by name: the message count. The
+side flattening out of an `extreme` regime is exempt from
+`max_behind_ticks` here and is not in the Python reference, which still
+drops it, so this implementation sends the messages that place and cancel
+a quote the reference never places. No fill and no P&L line moves. Any
+other difference fails the script.
 
 The Python suite's 136 tests are here, case for case: the builders against
 scripted MBO and MBP-10 sequences; VPIN's bucket arithmetic and the gate's

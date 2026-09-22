@@ -77,6 +77,31 @@ TEST_CASE("replay runs, fills and ends flat of quotes") {
     CHECK(result.summary().find("markouts") != std::string::npos);
 }
 
+TEST_CASE("the replay applies the quoting hours") {
+    Config cfg = test_config();
+    cfg.replay.synthetic_toxic_fraction = 0.5;
+    cfg.risk.daily_loss_limit_usd = 100'000.0;
+    // The generated tape is stamped at ``quote_start`` on a weekday, so it
+    // is inside the hours from its first record.
+    ReplayRunner quoting(cfg);
+    const ReplayResult inside = quoting.run();
+    CHECK(inside.fills > 0);
+
+    // The same tape stamped an hour and three quarters earlier: every
+    // decision cycle still runs, and none of them quotes. Before the
+    // replay read the hours at all this was indistinguishable from the run
+    // above, so no replay number was the configuration the live walk runs.
+    ReplayRunner early(cfg);
+    const std::int64_t start = session_start_ns(early.tz, SYNTHETIC_DATE, TimeOfDay{7, 0, 0});
+    SyntheticSource source(SyntheticMarket(es(), cfg.replay.synthetic_seconds, cfg.replay.synthetic_start_price,
+                                           static_cast<std::uint64_t>(cfg.replay.synthetic_seed),
+                                           cfg.replay.synthetic_toxic_fraction, start));
+    const ReplayResult outside = early.run(&source);
+    CHECK_FALSE(early.in_hours(static_cast<double>(start) / 1e9));
+    CHECK(outside.cycles == inside.cycles);
+    CHECK(outside.fills == 0);
+}
+
 TEST_CASE("the message rate stays inside the budget") {
     Config cfg = test_config();
     cfg.execution.max_messages_per_second = 5.0;

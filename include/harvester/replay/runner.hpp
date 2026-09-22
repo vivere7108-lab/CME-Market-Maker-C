@@ -4,11 +4,18 @@
 // it, the decision cycle runs each ``live.decision_interval_ms`` of tape
 // time, and the message budget refills on that same clock -- so a replay
 // also says whether the quoting would have stayed inside IBKR's limit on
-// that tape.  Fills come from ``SimulatedBroker``; see its header for what
-// that does and does not model, and read every replay P&L with it in
-// mind: no latency, no impact, back-of-queue placement.
+// that tape.  The quoting hours are read off that same clock, in the
+// product's zone, exactly as the live runner reads them: a tape that
+// starts before ``live.quote_start`` is not quoted until it does.  The
+// generated market is placed at ``quote_start`` on a weekday for the same
+// reason; run one longer than the session and it stops at ``quote_end``.
+//
+// Fills come from ``SimulatedBroker``; see its header for what that does
+// and does not model, and read every replay P&L with it in mind: no
+// latency, no impact, back-of-queue placement.
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -24,8 +31,14 @@
 #include "harvester/live/journal.hpp"
 #include "harvester/live/pipeline.hpp"
 #include "harvester/replay/source.hpp"
+#include "harvester/util/hours.hpp"
 
 namespace harvester {
+
+// The weekday a generated tape is stamped on: a Tuesday, so any tape
+// shorter than a session sits inside one set of quoting hours.
+inline constexpr std::chrono::year_month_day SYNTHETIC_DATE{std::chrono::year{2023}, std::chrono::November,
+                                                            std::chrono::day{14}};
 
 struct ReplayResult {
     std::int64_t cycles = 0;
@@ -60,6 +73,9 @@ public:
     std::unique_ptr<RecordSource> records();
     ReplayResult run(RecordSource* records = nullptr, std::optional<double> max_seconds = std::nullopt);
 
+    // The live runner's check, on the tape's clock.
+    bool in_hours(double now) const;
+
     // RecordSink
     bool on_mbo(const MboRecord& record) override;
     bool on_mbp10(const Mbp10Record& record) override;
@@ -67,6 +83,7 @@ public:
 
     Config cfg;
     const Product& product;
+    const std::chrono::time_zone* tz;
     RecordFeed feed;
     SimulatedBroker broker;
     Pipeline pipeline;

@@ -26,8 +26,12 @@ toxicity:
 quoting:
   gamma: 0.05
   kappa: 1.5                  # the depth dial, not a fill-intensity parameter;
-                              # see es_paper.yaml. Fitting it to the tape loses
-                              # $1,324 a session. Do not.
+                              # see es_paper.yaml. Fitting it to the tape (6.2)
+                              # loses $1,324 a session with no volatility
+                              # ceiling and $220 a session with max_sigma 0.25
+                              # -- the second is inside the noise of ten
+                              # sessions, so the reason not to fit it is the
+                              # mechanism, not that number.
   horizon_seconds: 60.0
   behind_best_ticks: 1        # a floor; the quote sits a median 3 ticks back
   max_behind_ticks: 8

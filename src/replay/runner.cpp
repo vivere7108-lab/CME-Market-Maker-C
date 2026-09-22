@@ -31,6 +31,7 @@ std::string ReplayResult::summary() const {
 ReplayRunner::ReplayRunner(const Config& cfg_, SessionJournal* journal)
     : cfg(cfg_),
       product(cfg.instrument()),
+      tz(find_zone(product.timezone)),
       feed(cfg.databento.schema, cfg.book.depth, [this] { return now_; }),
       broker(product, cfg.replay.queue_position, [this] { return now_; }),
       pipeline(cfg, broker, [this] { return now_; }, journal, &broker),
@@ -41,9 +42,16 @@ ReplayRunner::ReplayRunner(const Config& cfg_, SessionJournal* journal)
 std::unique_ptr<RecordSource> ReplayRunner::records() {
     const ReplayConfig& r = cfg.replay;
     if (r.source == "synthetic") {
+        // A generated tape has no date of its own, so it is stamped at
+        // ``live.quote_start`` on a fixed weekday: the hours check in ``step``
+        // is the live runner's, and a tape stamped at whatever the epoch
+        // happens to be would simply never be quoted. Only the stamps
+        // move -- the records, and so every fill and every P&L line, are
+        // the same tape the Python generator produces.
+        const std::int64_t start = session_start_ns(tz, SYNTHETIC_DATE, cfg.live.quote_start);
         return std::make_unique<SyntheticSource>(SyntheticMarket(
             product, r.synthetic_seconds, r.synthetic_start_price, static_cast<std::uint64_t>(r.synthetic_seed),
-            r.synthetic_toxic_fraction));
+            r.synthetic_toxic_fraction, start));
     }
     const std::string path = r.path.value_or("");
     const std::string schema = dbn_schema(path);
@@ -98,8 +106,12 @@ void ReplayRunner::step(double now) {
     now_ = now;
     feed.snapshot_into(snapshot_);
     feed.take_trades_into(trade_buffer_);
-    pipeline.step(now, snapshot_, trade_buffer_, true, feed.age_seconds(now));
+    pipeline.step(now, snapshot_, trade_buffer_, in_hours(now), feed.age_seconds(now));
     account_level(now);
+}
+
+bool ReplayRunner::in_hours(double now) const {
+    return within_quoting_hours(now, tz, cfg.live.quote_start, cfg.live.quote_end);
 }
 
 void ReplayRunner::account_level(double now) {

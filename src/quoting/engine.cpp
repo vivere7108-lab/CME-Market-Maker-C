@@ -38,7 +38,9 @@ QuoteEngine::QuoteEngine(const QuotingConfig& cfg_, const RiskConfig& risk_, con
     : cfg(cfg_), risk(risk_), product(product_), anchor_is_microprice(anchor == "microprice"),
       extreme_pull(extreme_action == "pull"),
       external_half(cfg_.external_half_file.empty() ? ExternalSeries()
-                                                    : ExternalSeries(cfg_.external_half_file)) {}
+                                                    : ExternalSeries(cfg_.external_half_file)),
+      external_skew(cfg_.external_skew_file.empty() ? ExternalSeries()
+                                                    : ExternalSeries(cfg_.external_skew_file)) {}
 
 double QuoteEngine::reservation(double anchor, int inventory, double sigma) const {
     return anchor - inventory * cfg.gamma * sigma * sigma * cfg.horizon_seconds;
@@ -75,8 +77,13 @@ QuoteDecision QuoteEngine::decide(const BookSnapshot& snapshot, double sigma, co
     half *= toxicity.spread_multiplier;
     half = std::max(half, cfg.min_half_spread_ticks * tick);
 
-    const double skew_ticks = cfg.skew_ofi_ticks * flow.ofi + cfg.skew_depletion_ticks * flow.depletion +
-                              cfg.skew_run_ticks * flow.run;
+    double skew_ticks = cfg.skew_ofi_ticks * flow.ofi + cfg.skew_depletion_ticks * flow.depletion +
+                        cfg.skew_run_ticks * flow.run;
+    // An offline rule reading something outside this book adds to the skew
+    // rather than replacing it, so the arms differ only by what it says.
+    if (!external_skew.empty()) {
+        if (const auto ticks = external_skew.at(snapshot.ts_event)) skew_ticks += *ticks;
+    }
     r += skew_ticks * tick;
 
     // Cooperative: behind the touch, snapped outwards.
@@ -95,6 +102,16 @@ QuoteDecision QuoteEngine::decide(const BookSnapshot& snapshot, double sigma, co
 
     bool want_bid = true;
     bool want_ask = true;
+    // Set when ``extreme`` has left only the flattening side quoted. That
+    // side is exempt from ``max_behind_ticks`` below: the level's spread
+    // multiplier (4.0 on a ~2.7 tick half-spread) has already put it 10-12
+    // ticks back, past a cap of 8, so applying the cap turns
+    // ``reduce_only`` into ``pull`` -- it quoted in 0 of 881 extreme
+    // snapshots over the ten ES tapes, and a position taken into an
+    // extreme regime had no passive way out. The cap exists to stop the
+    // engine resting where only a bad fill can reach it; a quote whose
+    // only possible fill reduces the position is the opposite trade.
+    bool extreme_flattening = false;
     if (toxicity.level == ToxicityLevel::Extreme) {
         if (extreme_pull || inventory == 0) {
             want_bid = want_ask = false;
@@ -104,6 +121,7 @@ QuoteDecision QuoteEngine::decide(const BookSnapshot& snapshot, double sigma, co
             size = std::max(size, 1);
             want_bid = inventory < 0;
             want_ask = inventory > 0;
+            extreme_flattening = true;
             out.reasons.emplace_back("extreme toxicity: reduce-only");
         }
     }
@@ -134,15 +152,27 @@ QuoteDecision QuoteEngine::decide(const BookSnapshot& snapshot, double sigma, co
         out.reasons.emplace_back("at the position cap: no ask");
     }
 
-    // Too far behind the touch to be anything but a bad fill.
+    // Too far behind the touch to be anything but a bad fill -- except for
+    // the side that is flattening out of an extreme regime, which is the
+    // only passive exit there is.
     const double max_behind = cfg.max_behind_ticks * tick + 1e-9;
     if (want_bid && best_bid - bid_price > max_behind) {
-        want_bid = false;
-        out.reasons.push_back(std::format("bid {:.0f}t behind the touch", product.ticks(best_bid - bid_price)));
+        if (extreme_flattening) {
+            out.reasons.push_back(std::format("bid {:.0f}t behind the touch, kept to flatten",
+                                              product.ticks(best_bid - bid_price)));
+        } else {
+            want_bid = false;
+            out.reasons.push_back(std::format("bid {:.0f}t behind the touch", product.ticks(best_bid - bid_price)));
+        }
     }
     if (want_ask && ask_price - best_ask > max_behind) {
-        want_ask = false;
-        out.reasons.push_back(std::format("ask {:.0f}t behind the touch", product.ticks(ask_price - best_ask)));
+        if (extreme_flattening) {
+            out.reasons.push_back(std::format("ask {:.0f}t behind the touch, kept to flatten",
+                                              product.ticks(ask_price - best_ask)));
+        } else {
+            want_ask = false;
+            out.reasons.push_back(std::format("ask {:.0f}t behind the touch", product.ticks(ask_price - best_ask)));
+        }
     }
 
     if (want_bid) out.bid = Quote{1, bid_price, bid_size};

@@ -82,7 +82,17 @@ void QuoteManager::reconcile_side(int side, double now) {
         return;
     }
     if (order->state == OrderState::Unknown) {
-        queue_.withdraw(key);
+        // Suspended until the broker says what this order is. The cancel
+        // that put the side here may itself have been the message that was
+        // lost, so it is re-sent on the same interval rather than waited
+        // on forever -- through the queue, so it takes a token and honours
+        // the cancel priority like any other.
+        if (now - order->sent_at > cfg_.ack_timeout_seconds) {
+            queue_.submit(key, PRIORITY_CANCEL, [this, side] { retry_cancel(side); },
+                          std::format("re-cancel {} (unacknowledged)", key));
+        } else {
+            queue_.withdraw(key);
+        }
         return;
     }
 
@@ -178,6 +188,30 @@ void QuoteManager::on_timeout(WorkingOrder& order, double now) {
     }
     order.state = OrderState::Unknown;
     order.sent_at = now;
+    order.cancel_attempts = 1;
+}
+
+// A cancel re-sent to a side the broker has still said nothing about.
+void QuoteManager::retry_cancel(int side) {
+    auto& order = slot(side);
+    if (!order || order->state != OrderState::Unknown) return;  // an event arrived while this was queued
+    const double now = clock_();
+    ++order->cancel_attempts;
+    ++stuck_cancels;
+    order->sent_at = now;
+    try {
+        broker_.cancel(order->handle);
+    } catch (const std::exception& exc) {
+        HLOG_ERROR(kLog, "cancel of #{} failed: {}", order->handle.order_id, exc.what());
+        return;
+    }
+    if (order->cancel_attempts > LOUD_AFTER_CANCELS) {
+        HLOG_ERROR(kLog, "{} order #{} has ignored {} cancels; the {} side has not quoted since", order->label(),
+                   order->handle.order_id, order->cancel_attempts, order->label());
+    } else {
+        HLOG_WARNING(kLog, "{} order #{}: cancel {} with still no acknowledgement", order->label(),
+                     order->handle.order_id, order->cancel_attempts);
+    }
 }
 
 std::vector<Fill> QuoteManager::on_events(const std::vector<OrderEvent>& events) {
