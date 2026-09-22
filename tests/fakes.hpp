@@ -13,10 +13,59 @@
 #include <vector>
 
 #include "harvester/execution/ibkr.hpp"
+#include "harvester/execution/market_data.hpp"
 
 namespace test {
 
 using namespace harvester;
+
+// An IBKR market-data session that reports nothing on its own: the test
+// drives the feed's listener by hand, which is the whole point of the
+// seam -- a delete at row 3 does not need a socket.
+class FakeMarketData : public IbMarketData {
+public:
+    struct Subscription {
+        IbContract contract;
+        int rows = 0;
+    };
+
+    std::vector<IbContract> qualified{[] {
+        IbContract c;
+        c.con_id = 5001;
+        c.symbol = "ES";
+        c.sec_type = "FUT";
+        c.exchange = "CME";
+        c.currency = "USD";
+        c.local_symbol = "ESZ6";
+        return c;
+    }()};
+    std::vector<IbContract> queries;
+    std::optional<Subscription> subscription;
+    int connects = 0;
+    int disconnects = 0;
+    bool connected = false;
+    int client_id = 0;
+
+    void connect(const std::string&, int, int id, double) override {
+        ++connects;
+        client_id = id;
+        connected = true;
+    }
+    void disconnect() override {
+        ++disconnects;
+        connected = false;
+    }
+    bool is_connected() const override { return connected; }
+    std::vector<IbContract> qualify(const IbContract& query) override {
+        queries.push_back(query);
+        return qualified;
+    }
+    void subscribe(const IbContract& contract, int rows) override { subscription = Subscription{contract, rows}; }
+    void unsubscribe() override { subscription.reset(); }
+    void set_listener(IbMarketDataListener* listener) override { listener_ = listener; }
+
+    IbMarketDataListener* listener_ = nullptr;
+};
 
 class FakeGateway : public IbGateway {
 public:

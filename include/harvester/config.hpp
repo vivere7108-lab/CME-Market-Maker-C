@@ -230,6 +230,18 @@ struct IBKRConfig {
     double connect_timeout = 15.0;
     std::optional<std::string> local_symbol;
     bool outside_rth = true;
+    // Take the book from IBKR instead of Databento: the CME Real-Time
+    // (P,L2) add-on rather than MDP 3.0. Read
+    // ``execution/ibkr_feed.hpp`` before trusting a number measured this
+    // way -- the tape has no aggressor flag, the book is sampled rather
+    // than streamed, and the timestamps are local.
+    bool market_data = false;
+    // The feed's own client id, so a broker reconnect does not drop the
+    // book. 0 means ``client_id + 1``.
+    int market_data_client_id = 0;
+    // Rows of depth to ask IBKR for. 0 means ``book.depth``. IBKR returns
+    // what the product has if that is fewer.
+    int market_data_rows = 0;
 
     void validate() const;
 };

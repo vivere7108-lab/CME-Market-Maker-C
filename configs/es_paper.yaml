@@ -171,6 +171,29 @@ ibkr:
   client_id: 23
   allow_live_trading: true    # required to route non-dry-run orders; see above
   outside_rth: true
+  market_data: false          # false = the book comes from Databento (MDP 3.0).
+                              # true = it comes from IBKR's own depth, which
+                              # needs the CME Real-Time (P,L2) add-on on the
+                              # account. That is a fallback for when the
+                              # Databento session cannot be had, NOT an
+                              # equivalent: IBKR sends no aggressor flag (the
+                              # side is inferred with the quote rule), it
+                              # maintains a ladder rather than relaying every
+                              # exchange message (so OFI and depletion see a
+                              # coarser series), and it timestamps nothing
+                              # usable (records are stamped on arrival here, so
+                              # markouts carry IBKR's latency). Read the header
+                              # of include/harvester/execution/ibkr_feed.hpp
+                              # before comparing any number from this feed with
+                              # a replayed one. Run `harvester doctor` with it
+                              # on: it reports the share of trades the quote
+                              # rule could not call, which is what VPIN's levels
+                              # rest on here.
+  market_data_client_id: 0    # 0 = client_id + 1. The feed gets its own TWS
+                              # session so a broker reconnect does not take the
+                              # book down with it, and vice versa.
+  market_data_rows: 0         # 0 = book.depth. IBKR returns fewer if that is
+                              # all the product has.
 
 live:
   journal: true

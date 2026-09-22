@@ -5,6 +5,7 @@
 #include <thread>
 
 #include "harvester/databento/api.hpp"
+#include "harvester/execution/ibkr_feed.hpp"
 #include "harvester/execution/simulated.hpp"
 #include "harvester/util/clock.hpp"
 #include "harvester/util/hours.hpp"
@@ -40,7 +41,10 @@ LiveRunner::LiveRunner(const Config& cfg, bool dry_run, std::shared_ptr<RecordFe
                        ConnectionFactory connection_factory)
     : cfg_(cfg), dry_run_(dry_run), product_(cfg_.instrument()), tz_(find_zone(product_.timezone)),
       feed_(std::move(feed)), connection_factory_(std::move(connection_factory)) {
-    if (!feed_) feed_ = make_databento_feed(cfg_.databento, cfg_.live, product_, cfg_.book.depth);
+    if (!feed_) {
+        feed_ = cfg_.ibkr.market_data ? make_ibkr_feed(cfg_.ibkr, product_, cfg_.book.depth)
+                                      : make_databento_feed(cfg_.databento, cfg_.live, product_, cfg_.book.depth);
+    }
     if (cfg_.live.journal) journal_ = std::make_unique<SessionJournal>(cfg_.live.journal_dir);
 }
 

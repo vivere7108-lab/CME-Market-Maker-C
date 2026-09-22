@@ -28,6 +28,7 @@
 #include "harvester/config.hpp"
 #include "harvester/databento/api.hpp"
 #include "harvester/execution/ibkr.hpp"
+#include "harvester/execution/ibkr_feed.hpp"
 #include "harvester/live/journal.hpp"
 #include "harvester/live/runner.hpp"
 #include "harvester/replay/runner.hpp"
@@ -264,16 +265,29 @@ int cmd_doctor(const Args& args) {
     };
 
     // -- the feed --
-    const char* key = std::getenv(cfg.databento.api_key_env.c_str());
-    check(std::format("{} is set", cfg.databento.api_key_env), key != nullptr && *key != '\0');
+    // Whichever one is configured: Databento's MDP 3.0, or IBKR's own
+    // depth through the CME Real-Time (P,L2) add-on.
+    const bool from_ibkr = cfg.ibkr.market_data;
+    const char* key = from_ibkr ? "" : std::getenv(cfg.databento.api_key_env.c_str());
+    bool ready = true;
+    if (from_ibkr) {
+        check("book source", true, "IBKR market data (ibkr.market_data), not Databento");
+        ready = check("IBKR market data in this build", ibkr_market_data_supported(),
+                      ibkr_market_data_supported() ? "" : "build with -DHARVESTER_WITH_IBKR=ON and TWS_API_DIR");
+    } else {
+        ready = check(std::format("{} is set", cfg.databento.api_key_env), key != nullptr && *key != '\0');
+        if (ready && !databento_supported()) {
+            ready = check("databento feed", false,
+                          "this build has no Databento client (HARVESTER_WITH_DATABENTO is off)");
+        }
+    }
     std::optional<std::string> raw_symbol;
-    if (key != nullptr && *key != '\0') {
-        if (!databento_supported()) {
-            check("databento feed", false, "this build has no Databento client (HARVESTER_WITH_DATABENTO is off)");
-        } else {
+    if (ready) {
+        {
             std::shared_ptr<RecordFeed> feed;
             try {
-                feed = make_databento_feed(cfg.databento, cfg.live, product, cfg.book.depth);
+                feed = from_ibkr ? make_ibkr_feed(cfg.ibkr, product, cfg.book.depth)
+                                 : make_databento_feed(cfg.databento, cfg.live, product, cfg.book.depth);
                 feed->start();
                 raw_symbol = feed->wait_for_symbol(20.0);
                 check("feed named the contract", raw_symbol.has_value(),
@@ -295,13 +309,27 @@ int cmd_doctor(const Args& args) {
                                         feed_seconds));
                 const std::vector<Trade> trades = feed->take_trades();
                 const auto flagged = std::count_if(trades.begin(), trades.end(), [](const Trade& t) { return t.aggressor != 0; });
-                check("tape carries the aggressor flag", trades.empty() || flagged > 0,
-                      trades.empty() ? "no trades yet -- re-run during the session"
-                                     : std::format("{} trades in {:.0f}s, {} with an aggressor", trades.size(),
-                                                   feed_seconds, flagged));
+                if (from_ibkr) {
+                    // IBKR does not send one, so this is the quote rule's
+                    // hit rate -- the number VPIN's levels rest on here.
+                    const double unknown = trades.empty() ? 0.0
+                                                          : 1.0 - static_cast<double>(flagged) /
+                                                                      static_cast<double>(trades.size());
+                    check("aggressor inferred from the book", trades.empty() || unknown < 0.10,
+                          trades.empty()
+                              ? "no trades yet -- re-run during the session"
+                              : std::format("{} trades in {:.0f}s, {:.1f}% could not be called (IBKR sends no side; "
+                                            "toxicity.unknown_side decides what happens to those)",
+                                            trades.size(), feed_seconds, 100.0 * unknown));
+                } else {
+                    check("tape carries the aggressor flag", trades.empty() || flagged > 0,
+                          trades.empty() ? "no trades yet -- re-run during the session"
+                                         : std::format("{} trades in {:.0f}s, {} with an aggressor", trades.size(),
+                                                       feed_seconds, flagged));
+                }
                 check("feed errors", feed->errors() == 0, std::format("{} errors", feed->errors()));
             } catch (const std::exception& exc) {  // this is the report
-                check("databento feed", false, exc.what());
+                check(from_ibkr ? "IBKR market data" : "databento feed", false, exc.what());
             }
             if (feed) feed->close();
         }

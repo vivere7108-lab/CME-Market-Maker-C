@@ -65,6 +65,7 @@ add_library(harvester_core STATIC
   src/quoting/engine.cpp
   src/execution/throttle.cpp
   src/execution/quotes.cpp
+  src/execution/ibkr_feed.cpp
   src/execution/simulated.cpp
   src/execution/ibkr.cpp
   src/inventory.cpp
@@ -108,9 +109,13 @@ if(HARVESTER_WITH_IBKR)
     message(FATAL_ERROR "HARVESTER_WITH_IBKR needs TWS_API_DIR pointing at IBJts/source/cppclient/client")
   endif()
   include(cmake/TwsApi.cmake)
-  target_sources(harvester_core PRIVATE src/execution/tws_gateway.cpp)
+  target_sources(harvester_core PRIVATE src/execution/tws_gateway.cpp src/execution/tws_market_data.cpp)
   target_compile_definitions(harvester_core PUBLIC HARVESTER_WITH_IBKR=1)
   target_link_libraries(harvester_core PUBLIC twsapi)
+else()
+  # The ladder in ibkr_feed.cpp is always built and always tested; only
+  # the socket under it needs the SDK.
+  target_sources(harvester_core PRIVATE src/execution/ibkr_feed_stub.cpp)
 endif()
 
 # -- the binary --------------------------------------------------------------
@@ -129,6 +134,7 @@ if(HARVESTER_BUILD_TESTS)
     tests/test_engine.cpp
     tests/test_execution.cpp
     tests/test_ibkr.cpp
+    tests/test_ibkr_feed.cpp
     tests/test_inventory_risk.cpp
     tests/test_replay_live.cpp
     tests/test_signals.cpp
