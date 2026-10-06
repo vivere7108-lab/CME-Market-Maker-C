@@ -1,5 +1,18 @@
 # CME-Market-Maker-C
 
+> **Status 2026-10-06: superseded by [MarketMaker](https://github.com/vivere7108-lab/MarketMaker)
+> (clean-room rebuild, 2026-09-26), to be archived.** Every line's state is recorded in
+> [Wealth-Optimiser](https://github.com/vivere7108-lab/Wealth-Optimiser)'s `MAP.md`. Three things here
+> are still unique and are copied out before the archive: `cmake/TwsApi.cmake` and
+> `src/execution/bid64_shim.cpp` (the only C++ TWS build; MarketMaker's CMake cites them),
+> `deploy/install-ibc.sh`, `deploy/ibc.service` and `deploy/harvester.env.example` (how the VPS gateway,
+> the `harvester` user and `/etc/harvester.env` that the running hedger depends on were created), and
+> `build/_deps` on the local box, which MarketMaker's `make build-dbn` reads. No order was ever sent
+> through the TWS adapter; `configs/es_paper.yaml` is armed (`allow_live_trading: true`) and is never
+> carried forward. The synthetic-tape tables below are not results (MarketMaker rule 1); the ES fee of
+> $2.30 in `src/instruments.cpp` is assumed, the measured figure is $2.24. The default branch is a
+> `claude/*` branch; `main` is created from it before archiving.
+
 The order-flow and toxicity aware CME futures market maker of
 [CME-Futures-Spread-Harvester](https://github.com/vivere7108-lab/CME-Futures-Spread-Harvester),
 translated from Python into C++20 for the live path. Same book, same
